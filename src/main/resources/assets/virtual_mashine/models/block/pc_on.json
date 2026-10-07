@@ -1,0 +1,7 @@
+{
+  "parent": "virtual_mashine:block/pc",
+  "textures": {
+    "case_front": "virtual_mashine:block/pc_case_front_on",
+    "screen": "virtual_mashine:block/pc_screen_on"
+  }
+}

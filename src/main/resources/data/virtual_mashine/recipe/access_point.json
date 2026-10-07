@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "pattern": [
+    "R R",
+    "QCQ"
+  ],
+  "key": {
+    "R": "minecraft:lightning_rod",
+    "Q": "minecraft:quartz",
+    "C": "minecraft:comparator"
+  },
+  "result": {
+    "id": "virtual_mashine:access_point",
+    "count": 1
+  }
+}

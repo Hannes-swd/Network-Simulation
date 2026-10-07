@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "id": "virtual_mashine",
+  "version": "${version}",
+  "name": "Virtual Mashine",
+  "description": "Real computers and networks in Minecraft: PCs, laptops, servers, routers and switches run real operating systems (QEMU), connected by cables and WLAN.",
+  "authors": [
+    "Hannes"
+  ],
+  "contact": {
+    "homepage": "https://github.com/Hannes-swd/Network-Simulation",
+    "sources": "https://github.com/Hannes-swd/Network-Simulation",
+    "issues": "https://github.com/Hannes-swd/Network-Simulation/issues"
+  },
+  "license": "All-Rights-Reserved",
+  "icon": "assets/virtual_mashine/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "fabric-datagen": [
+      "dev.hannes.virtual_mashine.client.Virtual_mashineDataGenerator"
+    ],
+    "client": [
+      "dev.hannes.virtual_mashine.client.Virtual_mashineClient"
+    ],
+    "main": [
+      "dev.hannes.virtual_mashine.Virtual_mashine"
+    ]
+  },
+  "mixins": [
+    "virtual_mashine.mixins.json",
+    {
+      "config": "virtual_mashine.client.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "fabric-api": "*",
+    "minecraft": "~${minecraft_version}"
+  }
+}

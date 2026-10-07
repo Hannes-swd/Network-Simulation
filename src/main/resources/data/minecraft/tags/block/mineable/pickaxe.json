@@ -1,0 +1,13 @@
+{
+  "replace": false,
+  "values": [
+    "virtual_mashine:pc",
+    "virtual_mashine:server",
+    "virtual_mashine:router",
+    "virtual_mashine:managed_switch",
+    "virtual_mashine:switch",
+    "virtual_mashine:modem",
+    "virtual_mashine:laptop",
+    "virtual_mashine:access_point"
+  ]
+}

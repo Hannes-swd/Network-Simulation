@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "pattern": [
+    "SCS",
+    "ICI"
+  ],
+  "key": {
+    "S": "minecraft:string",
+    "C": "minecraft:copper_ingot",
+    "I": "minecraft:iron_ingot"
+  },
+  "result": {
+    "id": "virtual_mashine:cat7_cable",
+    "count": 4
+  }
+}

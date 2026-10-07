@@ -1,0 +1,7 @@
+{
+  "parent": "virtual_mashine:block/access_point",
+  "textures": {
+    "top": "virtual_mashine:block/access_point_top_on",
+    "front": "virtual_mashine:block/access_point_front_on"
+  }
+}

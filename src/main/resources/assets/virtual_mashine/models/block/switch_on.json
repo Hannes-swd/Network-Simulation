@@ -1,0 +1,6 @@
+{
+  "parent": "virtual_mashine:block/switch",
+  "textures": {
+    "front": "virtual_mashine:block/switch_front_on"
+  }
+}

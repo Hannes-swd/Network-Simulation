@@ -1,0 +1,148 @@
+{
+  "parent": "minecraft:block/block",
+  "textures": {
+    "particle": "virtual_mashine:block/pc_case_top",
+    "case_front": "virtual_mashine:block/pc_case_front",
+    "case_side": "virtual_mashine:block/pc_case_side",
+    "case_top": "virtual_mashine:block/pc_case_top",
+    "screen": "virtual_mashine:block/pc_screen",
+    "monitor_side": "virtual_mashine:block/pc_monitor_side",
+    "monitor_back": "virtual_mashine:block/pc_monitor_back"
+  },
+  "elements": [
+    {
+      "name": "case",
+      "from": [
+        0,
+        0,
+        0
+      ],
+      "to": [
+        16,
+        5,
+        16
+      ],
+      "faces": {
+        "north": {
+          "uv": [
+            0,
+            11,
+            16,
+            16
+          ],
+          "texture": "#case_front",
+          "cullface": "north"
+        },
+        "south": {
+          "uv": [
+            0,
+            11,
+            16,
+            16
+          ],
+          "texture": "#case_side",
+          "cullface": "south"
+        },
+        "east": {
+          "uv": [
+            0,
+            11,
+            16,
+            16
+          ],
+          "texture": "#case_side",
+          "cullface": "east"
+        },
+        "west": {
+          "uv": [
+            0,
+            11,
+            16,
+            16
+          ],
+          "texture": "#case_side",
+          "cullface": "west"
+        },
+        "up": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": "#case_top"
+        },
+        "down": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": "#case_top",
+          "cullface": "down"
+        }
+      }
+    },
+    {
+      "name": "monitor",
+      "from": [
+        2,
+        5,
+        2
+      ],
+      "to": [
+        14,
+        15,
+        14
+      ],
+      "faces": {
+        "north": {
+          "uv": [
+            2,
+            1,
+            14,
+            11
+          ],
+          "texture": "#screen"
+        },
+        "south": {
+          "uv": [
+            2,
+            1,
+            14,
+            11
+          ],
+          "texture": "#monitor_back"
+        },
+        "east": {
+          "uv": [
+            2,
+            1,
+            14,
+            11
+          ],
+          "texture": "#monitor_side"
+        },
+        "west": {
+          "uv": [
+            2,
+            1,
+            14,
+            11
+          ],
+          "texture": "#monitor_side"
+        },
+        "up": {
+          "uv": [
+            2,
+            2,
+            14,
+            14
+          ],
+          "texture": "#case_top"
+        }
+      }
+    }
+  ]
+}

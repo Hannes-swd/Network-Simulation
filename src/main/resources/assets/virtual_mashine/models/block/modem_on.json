@@ -1,0 +1,6 @@
+{
+  "parent": "virtual_mashine:block/modem",
+  "textures": {
+    "front": "virtual_mashine:block/modem_front_on"
+  }
+}

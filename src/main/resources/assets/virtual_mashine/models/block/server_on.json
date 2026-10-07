@@ -1,0 +1,6 @@
+{
+  "parent": "virtual_mashine:block/server",
+  "textures": {
+    "front": "virtual_mashine:block/server_front_on"
+  }
+}

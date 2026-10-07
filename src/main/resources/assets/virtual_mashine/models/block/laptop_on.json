@@ -1,0 +1,6 @@
+{
+  "parent": "virtual_mashine:block/laptop",
+  "textures": {
+    "screen": "virtual_mashine:block/laptop_screen_on"
+  }
+}

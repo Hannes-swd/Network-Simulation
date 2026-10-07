@@ -1,0 +1,16 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "pattern": [
+    "SCS",
+    "SCS"
+  ],
+  "key": {
+    "S": "minecraft:string",
+    "C": "minecraft:copper_ingot"
+  },
+  "result": {
+    "id": "virtual_mashine:cat6_cable",
+    "count": 6
+  }
+}
