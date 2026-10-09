@@ -1,12 +1,15 @@
 package dev.hannes.virtual_mashine.client.screen;
 
+import dev.hannes.virtual_mashine.client.ClientPcState;
 import dev.hannes.virtual_mashine.client.vnc.RfbClient;
 import dev.hannes.virtual_mashine.client.vnc.RfbTransport;
+import dev.hannes.virtual_mashine.client.vnc.TextTyper;
 import dev.hannes.virtual_mashine.client.vnc.TunnelTransport;
 import dev.hannes.virtual_mashine.client.vnc.VncKeys;
 import dev.hannes.virtual_mashine.network.PcActionPayload;
 import dev.hannes.virtual_mashine.network.PcInfoPayload;
 import dev.hannes.virtual_mashine.vm.HostInfo;
+import dev.hannes.virtual_mashine.vm.VmConfig;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.Tooltip;
@@ -19,12 +22,17 @@ import org.jspecify.annotations.Nullable;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 
 /**
  * Shows the guest screen. Clicking into it captures keyboard and mouse: every key (including
  * ESC and F-keys) then goes to the guest until Left Ctrl + Left Alt releases it again.
  * Closing the screen leaves the machine running in the background.
+ * <p>
+ * The clipboard is shared with the guest (when spice-vdagent runs there): the guest's copies arrive
+ * at once, this computer's clipboard is handed over when the player clicks into the screen. The
+ * paste button types the clipboard text instead, which works with every system.
  */
 public class PcDisplayScreen extends PcScreen {
     private static final int TOOLBAR = 24;
@@ -42,12 +50,16 @@ public class PcDisplayScreen extends PcScreen {
     private int buttonMask;
     private boolean cursorHidden;
     private int reconnectDelay;
+    /** Clipboard text both sides already have, so nothing is sent back and forth twice. */
+    private @Nullable String lastClipboard;
 
     private Button freezeButton;
     private Button shutdownButton;
     private Button resetButton;
     private Button powerOffButton;
     private Button ctrlAltDelButton;
+    private Button pasteButton;
+    private Button layoutButton;
 
     private int viewX;
     private int viewY;
@@ -63,6 +75,8 @@ public class PcDisplayScreen extends PcScreen {
         Component[] labels = {
                 Component.translatable("virtual_mashine.button.control"),
                 Component.translatable("virtual_mashine.button.ctrl_alt_del"),
+                Component.translatable("virtual_mashine.button.paste"),
+                layoutLabel(),
                 Component.translatable("virtual_mashine.button.shutdown"),
                 Component.translatable("virtual_mashine.button.reset"),
                 Component.translatable("virtual_mashine.button.power_off"),
@@ -87,6 +101,8 @@ public class PcDisplayScreen extends PcScreen {
         Button.OnPress[] actions = {
                 b -> openControl(),
                 b -> sendCtrlAltDel(),
+                b -> pasteAsKeys(),
+                b -> toggleLayout(),
                 b -> send(PcActionPayload.SHUTDOWN),
                 b -> send(PcActionPayload.RESET),
                 b -> send(PcActionPayload.POWER_OFF),
@@ -98,10 +114,14 @@ public class PcDisplayScreen extends PcScreen {
             x += widths[i] + gap;
         }
         ctrlAltDelButton = buttons[1];
-        shutdownButton = buttons[2];
-        resetButton = buttons[3];
-        powerOffButton = buttons[4];
-        freezeButton = buttons[5];
+        pasteButton = buttons[2];
+        layoutButton = buttons[3];
+        shutdownButton = buttons[4];
+        resetButton = buttons[5];
+        powerOffButton = buttons[6];
+        freezeButton = buttons[7];
+        pasteButton.setTooltip(Tooltip.create(Component.translatable("virtual_mashine.button.paste.tooltip")));
+        layoutButton.setTooltip(Tooltip.create(Component.translatable("virtual_mashine.button.layout.tooltip")));
         shutdownButton.setTooltip(Tooltip.create(Component.translatable("virtual_mashine.button.shutdown.tooltip")));
         powerOffButton.setTooltip(Tooltip.create(Component.translatable("virtual_mashine.button.power_off.tooltip")));
         updateButtons();
@@ -136,6 +156,8 @@ public class PcDisplayScreen extends PcScreen {
         resetButton.active = running;
         powerOffButton.active = running || "STOPPING".equals(info.state());
         ctrlAltDelButton.active = running;
+        pasteButton.active = running;
+        layoutButton.setMessage(layoutLabel());
         freezeButton.active = running && info.canFreeze();
         freezeButton.setTooltip(Tooltip.create(Component.translatable(info.canFreeze()
                 ? "virtual_mashine.button.freeze.tooltip" : "virtual_mashine.button.freeze.unsupported")));
@@ -174,6 +196,62 @@ public class PcDisplayScreen extends PcScreen {
         if (captured && !minecraft.isWindowActive()) {
             releaseCapture(); // Alt-Tab etc.: never leave keys stuck in the guest.
         }
+        syncClipboard();
+    }
+
+    // ---------------------------------------------------------------- clipboard
+
+    /** Text the guest copied lands in this computer's clipboard (the guest side needs spice-vdagent). */
+    private void syncClipboard() {
+        if (client == null || client.status() != RfbClient.Status.CONNECTED) {
+            return;
+        }
+        String fromGuest = client.takeGuestClipboard();
+        if (fromGuest != null && !fromGuest.isEmpty() && serverConfig.clipboardSharing) {
+            lastClipboard = fromGuest;
+            minecraft.keyboardHandler.setClipboard(fromGuest);
+        }
+    }
+
+    /**
+     * Hands this computer's clipboard to the guest, only at the moment the player clicks into the
+     * screen: a program in the VM never sees what is copied while nobody works in it.
+     */
+    private void pushClipboard() {
+        if (!serverConfig.clipboardSharing || client == null) {
+            return;
+        }
+        String host = minecraft.keyboardHandler.getClipboard();
+        if (!host.isEmpty() && !host.equals(lastClipboard) && client.sendClipboard(host)) {
+            lastClipboard = host;
+        }
+    }
+
+    /** Types the clipboard text into the guest, for systems without a clipboard agent. */
+    private void pasteAsKeys() {
+        String text = minecraft.keyboardHandler.getClipboard();
+        if (client == null || client.status() != RfbClient.Status.CONNECTED || text.isEmpty()) {
+            return;
+        }
+        TextTyper.type(client, text, serverConfig.typingLayout);
+        int missing = TextTyper.untypable(text, serverConfig.typingLayout);
+        if (missing > 0) {
+            SystemToast.addOrUpdate(minecraft.getToastManager(), MESSAGE_TOAST, Component.literal(serverConfig.name),
+                    Component.translatable("virtual_mashine.msg.paste_skipped", missing));
+        }
+    }
+
+    private Component layoutLabel() {
+        return Component.literal(serverConfig.typingLayout.toUpperCase(Locale.ROOT));
+    }
+
+    private void toggleLayout() {
+        VmConfig changed = serverConfig.copy();
+        int next = (VmConfig.TYPING_LAYOUTS.indexOf(changed.typingLayout) + 1) % VmConfig.TYPING_LAYOUTS.size();
+        changed.typingLayout = VmConfig.TYPING_LAYOUTS.get(next);
+        serverConfig = changed;
+        layoutButton.setMessage(layoutLabel());
+        ClientPcState.send(pcId(), PcActionPayload.CONFIG, changed.toJson());
     }
 
     // ---------------------------------------------------------------- rendering
@@ -279,6 +357,9 @@ public class PcDisplayScreen extends PcScreen {
     @Override
     public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
         if (connected() && isOverView(event.x(), event.y())) {
+            if (!captured) {
+                pushClipboard();
+            }
             captured = true;
             buttonMask |= vncButton(event.button());
             client.sendPointer(buttonMask, guestX(event.x()), guestY(event.y()));

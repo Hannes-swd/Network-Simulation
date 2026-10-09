@@ -1,0 +1,12 @@
+{
+  "parent": "minecraft:block/cube",
+  "textures": {
+    "particle": "virtual_mashine:block/io_module_side",
+    "north": "virtual_mashine:block/io_module_front_on",
+    "south": "virtual_mashine:block/io_module_back",
+    "east": "virtual_mashine:block/io_module_side",
+    "west": "virtual_mashine:block/io_module_side",
+    "up": "virtual_mashine:block/io_module_top",
+    "down": "virtual_mashine:block/io_module_top"
+  }
+}

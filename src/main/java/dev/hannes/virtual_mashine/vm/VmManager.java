@@ -140,6 +140,16 @@ public final class VmManager {
         return machine(id, type).config().name;
     }
 
+    /** What a display block shows: {width, height, VNC port (0 = off)}. */
+    public int[] displayState(UUID id) {
+        VirtualMachine vm = machines.get(id);
+        if (vm == null) {
+            return new int[]{2, 1, 0};
+        }
+        VmConfig c = vm.config();
+        return new int[]{c.displayWidth, c.displayHeight, vm.state() == VirtualMachine.State.RUNNING ? vm.vncPort() : 0};
+    }
+
     public List<VirtualMachine> runningMachines() {
         List<VirtualMachine> running = new ArrayList<>();
         for (VirtualMachine vm : machines.values()) {
@@ -155,7 +165,9 @@ public final class VmManager {
     public void openTunnel(ServerPlayer player, TunnelPayloads.Open payload) {
         Set<UUID> allowed = openedBy.get(player.getUUID());
         VirtualMachine vm = machines.get(payload.pcId());
-        boolean permitted = allowed != null && allowed.contains(payload.pcId()) && vm != null;
+        // Displays are watched by everyone standing near them, without opening them first.
+        boolean permitted = vm != null && (allowed != null && allowed.contains(payload.pcId())
+                || vm.deviceType() == DeviceType.DISPLAY && network.isNear(payload.pcId(), player, 96));
         tunnels.open(player, payload.tunnelId(), permitted ? vm.vncPort() : -1);
     }
 
@@ -197,9 +209,11 @@ public final class VmManager {
             case PcActionPayload.SHUTDOWN -> vm.acpiShutdown();
             case PcActionPayload.POWER_OFF -> vm.powerOff();
             case PcActionPayload.RESET -> vm.reset();
+            case PcActionPayload.RESTART -> vm.restart();
             case PcActionPayload.FREEZE -> vm.freeze();
             case PcActionPayload.DISCARD_STATE -> vm.discardFrozenState();
             case PcActionPayload.DOWNLOAD_OPENWRT -> vm.downloadOpenWrt();
+            case PcActionPayload.DOWNLOAD_ANDROID -> vm.downloadAndroid();
             case PcActionPayload.RESET_DISK -> vm.resetDisk();
             case PcActionPayload.CONFIG -> {
                 try {

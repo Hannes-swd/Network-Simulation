@@ -17,9 +17,15 @@ public enum DeviceType {
     /** Notebook: a computer with only a WLAN card (port 0 has no socket). */
     LAPTOP("laptop", Kind.VM, 1, "wlan", 0, false, 4096, 2, false, 0.30, 0.05, 0.0),
     /** WLAN access point: bridges its wireless clients to its LAN port. */
-    ACCESS_POINT("access_point", Kind.AP, 1, "LAN", -1, true, 0, 0, false, 0.25, 0.09, 0.0);
+    ACCESS_POINT("access_point", Kind.AP, 1, "LAN", -1, true, 0, 0, false, 0.25, 0.09, 0.0),
+    /** Smartphone with Android: an item the player carries, WLAN only. */
+    PHONE("phone", Kind.VM, 1, "wlan", 0, false, 3072, 2, false, 0.0, 0.0, 0.0),
+    /** Network I/O module: reads and drives redstone on each face, controlled by Modbus TCP or HTTP. */
+    IO_MODULE("io_module", Kind.IO, 1, "LAN", -1, true, 0, 0, false, 0.5, 0.5, 0.0),
+    /** Network display: a small kiosk computer showing one web page on its front, used by looking and clicking. */
+    DISPLAY("display", Kind.VM, 1, "LAN", -1, true, 1024, 1, false, 0.5, 0.5, 0.0);
 
-    public enum Kind { VM, SWITCH, MODEM, AP }
+    public enum Kind { VM, SWITCH, MODEM, AP, IO }
 
     /** How many wireless clients one access point carries. */
     public static final int AP_CLIENT_SLOTS = 16;
@@ -62,14 +68,19 @@ public enum DeviceType {
         return kind == Kind.VM;
     }
 
-    /** Every machine with an operating system also has a serial port (console / COM1); laptops have none. */
+    /** Every machine with an operating system also has a serial port (console / COM1); laptops and phones have none. */
     public boolean hasConsole() {
-        return isVm() && this != LAPTOP;
+        return isVm() && !wirelessOnly() && this != DISPLAY;
     }
 
-    /** The laptop's WLAN card: it is connected through the WLAN menu, not with a cable. */
+    /** Laptop and phone: their only network card is WLAN, connected through the WLAN menu. */
+    public boolean wirelessOnly() {
+        return this == LAPTOP || this == PHONE;
+    }
+
+    /** The WLAN card of a laptop or phone: it is connected through the WLAN menu, not with a cable. */
     public boolean isWirelessPort(int port) {
-        return this == LAPTOP && port == 0;
+        return wirelessOnly() && port == 0;
     }
 
     /** Network ports plus the serial port. */

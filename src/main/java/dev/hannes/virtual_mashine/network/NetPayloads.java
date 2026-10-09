@@ -238,6 +238,93 @@ public final class NetPayloads {
         }
     }
 
+    /** Server to client: an I/O module's channels and network settings. */
+    public record IoView(UUID device, BlockPos pos, String deviceName, String name, String mac, String address, boolean link,
+                         boolean dhcp, String staticIp, String staticMask, String staticGateway, int outputMask, int[] levels,
+                         int connections, String message) implements CustomPacketPayload {
+        public static final Type<IoView> TYPE = new Type<>(Virtual_mashine.id("io_view"));
+        public static final StreamCodec<RegistryFriendlyByteBuf, IoView> CODEC = StreamCodec.ofMember(
+                (payload, buf) -> {
+                    UUIDUtil.STREAM_CODEC.encode(buf, payload.device);
+                    buf.writeBlockPos(payload.pos);
+                    buf.writeUtf(payload.deviceName, 64);
+                    buf.writeUtf(payload.name, 64);
+                    buf.writeUtf(payload.mac, 32);
+                    buf.writeUtf(payload.address, 64);
+                    buf.writeBoolean(payload.link);
+                    buf.writeBoolean(payload.dhcp);
+                    buf.writeUtf(payload.staticIp, 32);
+                    buf.writeUtf(payload.staticMask, 32);
+                    buf.writeUtf(payload.staticGateway, 32);
+                    buf.writeVarInt(payload.outputMask);
+                    for (int i = 0; i < 6; i++) {
+                        buf.writeByte(payload.levels[i]);
+                    }
+                    buf.writeVarInt(payload.connections);
+                    buf.writeUtf(payload.message, 128);
+                },
+                buf -> {
+                    UUID device = UUIDUtil.STREAM_CODEC.decode(buf);
+                    BlockPos pos = buf.readBlockPos();
+                    String deviceName = buf.readUtf(64);
+                    String name = buf.readUtf(64);
+                    String mac = buf.readUtf(32);
+                    String address = buf.readUtf(64);
+                    boolean link = buf.readBoolean();
+                    boolean dhcp = buf.readBoolean();
+                    String ip = buf.readUtf(32);
+                    String mask = buf.readUtf(32);
+                    String gateway = buf.readUtf(32);
+                    int outputs = buf.readVarInt();
+                    int[] levels = new int[6];
+                    for (int i = 0; i < 6; i++) {
+                        levels[i] = buf.readByte();
+                    }
+                    return new IoView(device, pos, deviceName, name, mac, address, link, dhcp, ip, mask, gateway, outputs, levels,
+                            buf.readVarInt(), buf.readUtf(128));
+                });
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Client to server: change a channel or the network settings of an I/O module, or just refresh. */
+    public record IoAction(UUID device, String action, int channel, int value, String name, boolean dhcp, String ip, String mask,
+                           String gateway) implements CustomPacketPayload {
+        public static final String REFRESH = "refresh";
+        /** value 1 = output, 0 = input */
+        public static final String MODE = "mode";
+        public static final String LEVEL = "level";
+        public static final String NETWORK = "network";
+
+        public static IoAction simple(UUID device, String action, int channel, int value) {
+            return new IoAction(device, action, channel, value, "", false, "", "", "");
+        }
+
+        public static final Type<IoAction> TYPE = new Type<>(Virtual_mashine.id("io_action"));
+        public static final StreamCodec<RegistryFriendlyByteBuf, IoAction> CODEC = StreamCodec.ofMember(
+                (payload, buf) -> {
+                    UUIDUtil.STREAM_CODEC.encode(buf, payload.device);
+                    buf.writeUtf(payload.action, 16);
+                    buf.writeVarInt(payload.channel);
+                    buf.writeVarInt(payload.value);
+                    buf.writeUtf(payload.name, 64);
+                    buf.writeBoolean(payload.dhcp);
+                    buf.writeUtf(payload.ip, 32);
+                    buf.writeUtf(payload.mask, 32);
+                    buf.writeUtf(payload.gateway, 32);
+                },
+                buf -> new IoAction(UUIDUtil.STREAM_CODEC.decode(buf), buf.readUtf(16), buf.readVarInt(), buf.readVarInt(),
+                        buf.readUtf(64), buf.readBoolean(), buf.readUtf(32), buf.readUtf(32), buf.readUtf(32)));
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
     /** One cable as the client draws it. */
     public record CableVisual(double ax, double ay, double az, double bx, double by, double bz, int color) {
     }

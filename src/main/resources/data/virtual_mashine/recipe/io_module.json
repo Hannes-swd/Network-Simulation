@@ -1,0 +1,20 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "pattern": [
+    "IRI",
+    "CXP",
+    "IRI"
+  ],
+  "key": {
+    "I": "minecraft:iron_ingot",
+    "R": "minecraft:redstone",
+    "C": "minecraft:comparator",
+    "P": "minecraft:repeater",
+    "X": "minecraft:observer"
+  },
+  "result": {
+    "id": "virtual_mashine:io_module",
+    "count": 1
+  }
+}

@@ -25,6 +25,14 @@ public final class PcNetworking {
         PayloadTypeRegistry.clientboundPlay().register(NetPayloads.ApView.TYPE, NetPayloads.ApView.CODEC);
         PayloadTypeRegistry.serverboundPlay().register(NetPayloads.WlanAction.TYPE, NetPayloads.WlanAction.CODEC);
         PayloadTypeRegistry.serverboundPlay().register(NetPayloads.ApAction.TYPE, NetPayloads.ApAction.CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(NetPayloads.IoView.TYPE, NetPayloads.IoView.CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(NetPayloads.IoAction.TYPE, NetPayloads.IoAction.CODEC);
+        ServerPlayNetworking.registerGlobalReceiver(NetPayloads.IoAction.TYPE, (payload, context) -> {
+            VmManager manager = VmManager.get();
+            if (manager != null) {
+                manager.network().handleIoAction(context.player(), payload);
+            }
+        });
         ServerPlayNetworking.registerGlobalReceiver(NetPayloads.WlanAction.TYPE, (payload, context) -> {
             VmManager manager = VmManager.get();
             if (manager != null) {

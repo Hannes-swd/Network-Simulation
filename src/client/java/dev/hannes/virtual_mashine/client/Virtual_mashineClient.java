@@ -3,7 +3,10 @@ package dev.hannes.virtual_mashine.client;
 import dev.hannes.virtual_mashine.ModRegistry;
 import dev.hannes.virtual_mashine.client.net.CableRenderer;
 import dev.hannes.virtual_mashine.client.net.DeviceLedRenderer;
+import dev.hannes.virtual_mashine.client.display.DisplayManager;
 import dev.hannes.virtual_mashine.client.screen.AccessPointScreen;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import dev.hannes.virtual_mashine.client.screen.IoModuleScreen;
 import dev.hannes.virtual_mashine.client.screen.PortScreen;
 import dev.hannes.virtual_mashine.client.screen.WlanScreen;
 import dev.hannes.virtual_mashine.client.vnc.TunnelTransport;
@@ -44,7 +47,17 @@ public class Virtual_mashineClient implements ClientModInitializer {
                 minecraft.setScreen(new AccessPointScreen(payload));
             }
         });
+        ClientPlayNetworking.registerGlobalReceiver(NetPayloads.IoView.TYPE, (payload, context) -> {
+            Minecraft minecraft = context.client();
+            if (minecraft.screen instanceof IoModuleScreen screen && screen.deviceId().equals(payload.device())) {
+                screen.update(payload);
+            } else {
+                minecraft.setScreen(new IoModuleScreen(payload));
+            }
+        });
+        ClientTickEvents.END_CLIENT_TICK.register(DisplayManager::tick);
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+            DisplayManager.disconnectAll();
             TunnelTransport.closeAll();
             CableRenderer.clear();
         });

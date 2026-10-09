@@ -1,6 +1,7 @@
 package dev.hannes.virtual_mashine.client.vnc;
 
 import dev.hannes.virtual_mashine.Virtual_mashine;
+import org.jspecify.annotations.Nullable;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -10,6 +11,7 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.zip.DataFormatException;
 import java.util.zip.Inflater;
 
@@ -20,6 +22,7 @@ import java.util.zip.Inflater;
  * A background thread keeps an RGBA copy of the guest screen; the render thread uploads the
  * changed rows to a texture via {@link #consumeFrame}. Input is sent with QEMU's extended key
  * events, which carry raw scancodes, so the guest's own keyboard layout decides the characters.
+ * The clipboard uses the "extended clipboard" protocol, which QEMU bridges to spice-vdagent in the guest.
  */
 public final class RfbClient implements Closeable {
     public enum Status { CONNECTING, CONNECTED, CLOSED }
@@ -31,6 +34,15 @@ public final class RfbClient implements Closeable {
     private static final int ENCODING_COMPRESS_LEVEL_6 = -250;
     private static final int ENCODING_DESKTOP_SIZE = -223;
     private static final int ENCODING_QEMU_EXTENDED_KEY = -258;
+    private static final int ENCODING_EXTENDED_CLIPBOARD = 0xC0A1E5CE;
+
+    private static final int CLIPBOARD_TEXT = 1;
+    private static final int CLIPBOARD_CAPS = 1 << 24;
+    private static final int CLIPBOARD_REQUEST = 1 << 25;
+    private static final int CLIPBOARD_NOTIFY = 1 << 27;
+    private static final int CLIPBOARD_PROVIDE = 1 << 28;
+    /** Larger clipboard contents are ignored rather than flooding the connection. */
+    public static final int MAX_CLIPBOARD_BYTES = 1 << 20;
 
     private final int port;
     private final RfbTransport transport;
@@ -41,6 +53,7 @@ public final class RfbClient implements Closeable {
     private volatile Status status = Status.CONNECTING;
     private volatile String error = "";
     private volatile boolean extendedKeys;
+    private final AtomicReference<String> guestClipboard = new AtomicReference<>();
     private DataOutputStream out;
 
     // Guarded by frameLock.
@@ -145,6 +158,37 @@ public final class RfbClient implements Closeable {
         }
     }
 
+    /**
+     * Puts text into the guest's clipboard (works when spice-vdagent runs in the guest).
+     *
+     * @return false if it could not be sent, e.g. while still connecting
+     */
+    public boolean sendClipboard(String text) {
+        byte[] bytes = text.replace("\r\n", "\n").getBytes(StandardCharsets.UTF_8);
+        if (status != Status.CONNECTED || bytes.length > MAX_CLIPBOARD_BYTES) {
+            return false;
+        }
+        synchronized (writeLock) {
+            try {
+                // Classic ClientCutText; QEMU hands the bytes to the guest agent unchanged, so UTF-8 survives.
+                out.writeByte(6);
+                out.write(new byte[3]);
+                out.writeInt(bytes.length);
+                out.write(bytes);
+                out.flush();
+                return true;
+            } catch (IOException e) {
+                fail(e);
+                return false;
+            }
+        }
+    }
+
+    /** Text the guest copied since the last call, or null. */
+    public @Nullable String takeGuestClipboard() {
+        return guestClipboard.getAndSet(null);
+    }
+
     /** @param buttonMask bit 0 left, 1 middle, 2 right, 3/4 wheel up/down, 5/6 wheel left/right */
     public void sendPointer(int buttonMask, int x, int y) {
         if (status != Status.CONNECTED) {
@@ -192,10 +236,7 @@ public final class RfbClient implements Closeable {
                     case 2 -> {
                         // Bell.
                     }
-                    case 3 -> { // ServerCutText
-                        in.skipNBytes(3);
-                        in.skipNBytes(in.readInt() & 0xFFFFFFFFL);
-                    }
+                    case 3 -> readServerCutText(in);
                     default -> throw new IOException("Unknown VNC message " + type);
                 }
             }
@@ -264,8 +305,9 @@ public final class RfbClient implements Closeable {
 
             // QEMU uses the first encoding in this list that it supports.
             int[] encodings = transport.remote()
-                    ? new int[]{ENCODING_ZLIB, ENCODING_COPY_RECT, ENCODING_RAW, ENCODING_DESKTOP_SIZE, ENCODING_QEMU_EXTENDED_KEY, ENCODING_COMPRESS_LEVEL_6}
-                    : new int[]{ENCODING_RAW, ENCODING_COPY_RECT, ENCODING_DESKTOP_SIZE, ENCODING_QEMU_EXTENDED_KEY};
+                    ? new int[]{ENCODING_ZLIB, ENCODING_COPY_RECT, ENCODING_RAW, ENCODING_DESKTOP_SIZE, ENCODING_QEMU_EXTENDED_KEY,
+                            ENCODING_EXTENDED_CLIPBOARD, ENCODING_COMPRESS_LEVEL_6}
+                    : new int[]{ENCODING_RAW, ENCODING_COPY_RECT, ENCODING_DESKTOP_SIZE, ENCODING_QEMU_EXTENDED_KEY, ENCODING_EXTENDED_CLIPBOARD};
             out.writeByte(2);
             out.writeByte(0);
             out.writeShort(encodings.length);
@@ -274,6 +316,87 @@ public final class RfbClient implements Closeable {
             }
             out.flush();
         }
+    }
+
+    /**
+     * ServerCutText. A negative length marks the extended format: flags, then for "provide" a zlib
+     * stream of length-prefixed entries. The guest only announces a copy ("notify"); the text
+     * itself has to be requested.
+     */
+    private void readServerCutText(DataInputStream in) throws IOException {
+        in.skipNBytes(3);
+        int length = in.readInt();
+        long size = length >= 0 ? length : -(long) length;
+        if (size > MAX_CLIPBOARD_BYTES) {
+            in.skipNBytes(size);
+            return;
+        }
+        byte[] data = new byte[(int) size];
+        in.readFully(data);
+        if (length >= 0) {
+            guestClipboard.set(new String(data, StandardCharsets.ISO_8859_1));
+            return;
+        }
+        if (data.length < 4) {
+            return;
+        }
+        int flags = ByteBuffer.wrap(data).getInt();
+        if ((flags & CLIPBOARD_TEXT) == 0 || (flags & CLIPBOARD_CAPS) != 0) {
+            return;
+        }
+        if ((flags & CLIPBOARD_NOTIFY) != 0) {
+            synchronized (writeLock) {
+                out.writeByte(6);
+                out.write(new byte[3]);
+                out.writeInt(-4);
+                out.writeInt(CLIPBOARD_REQUEST | CLIPBOARD_TEXT);
+                out.flush();
+            }
+        }
+        if ((flags & CLIPBOARD_PROVIDE) != 0) {
+            String text = inflateClipboardText(data);
+            if (text != null) {
+                guestClipboard.set(text);
+            }
+        }
+    }
+
+    private static @Nullable String inflateClipboardText(byte[] data) throws IOException {
+        Inflater clip = new Inflater();
+        try {
+            clip.setInput(data, 4, data.length - 4);
+            byte[] head = new byte[4];
+            if (inflateFully(clip, head) < 4) {
+                return null;
+            }
+            int textLength = ByteBuffer.wrap(head).getInt();
+            if (textLength < 0 || textLength > MAX_CLIPBOARD_BYTES) {
+                return null;
+            }
+            byte[] text = new byte[textLength];
+            int got = inflateFully(clip, text);
+            int end = got;
+            while (end > 0 && text[end - 1] == 0) {
+                end--; // The text is null-terminated.
+            }
+            return new String(text, 0, end, StandardCharsets.UTF_8);
+        } catch (DataFormatException e) {
+            throw new IOException("Corrupt clipboard data", e);
+        } finally {
+            clip.end();
+        }
+    }
+
+    private static int inflateFully(Inflater inflater, byte[] target) throws DataFormatException {
+        int produced = 0;
+        while (produced < target.length && !inflater.finished()) {
+            int n = inflater.inflate(target, produced, target.length - produced);
+            if (n == 0 && (inflater.needsInput() || inflater.needsDictionary())) {
+                break;
+            }
+            produced += n;
+        }
+        return produced;
     }
 
     private void readFramebufferUpdate(DataInputStream in) throws IOException {

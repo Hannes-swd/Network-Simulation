@@ -14,6 +14,8 @@ public record PcActionPayload(UUID pcId, String action, String argument) impleme
     public static final String SHUTDOWN = "shutdown";
     public static final String POWER_OFF = "power_off";
     public static final String RESET = "reset";
+    /** Power off and start again (a new machine process). */
+    public static final String RESTART = "restart";
     public static final String FREEZE = "freeze";
     public static final String DISCARD_STATE = "discard_state";
     /** Argument: the edited {@link dev.hannes.virtual_mashine.vm.VmConfig} as JSON. */
@@ -23,6 +25,8 @@ public record PcActionPayload(UUID pcId, String action, String argument) impleme
     public static final String PORTS = "ports";
     /** Fetch OpenWrt and install it on the (empty) disk at the next start. */
     public static final String DOWNLOAD_OPENWRT = "download_openwrt";
+    /** Phone with an empty disk: fetch Android and install it on the next start. */
+    public static final String DOWNLOAD_ANDROID = "download_android";
     /** Delete the disk; the next start begins fresh. */
     public static final String RESET_DISK = "reset_disk";
 
