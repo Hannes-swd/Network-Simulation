@@ -1,6 +1,7 @@
 package dev.hannes.virtual_mashine.client.screen;
 
 import dev.hannes.virtual_mashine.device.CableType;
+import dev.hannes.virtual_mashine.device.DeviceType;
 import dev.hannes.virtual_mashine.network.NetPayloads;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -152,7 +153,7 @@ public class PortScreen extends Screen {
         int hovered = socketAt(mouseX, mouseY);
         if (hovered >= 0) {
             List<FormattedCharSequence> lines = new ArrayList<>();
-            for (Component line : tooltip(view.ports().get(hovered))) {
+            for (Component line : tooltip(hovered)) {
                 lines.add(line.getVisualOrderText());
             }
             graphics.setTooltipForNextFrame(lines, mouseX, mouseY);
@@ -163,6 +164,10 @@ public class PortScreen extends Screen {
         int x = socketX(index);
         int y = socketY();
         boolean hover = socketAt(mouseX, mouseY) == index;
+        if (isUsb(index)) {
+            drawUsbSocket(graphics, x, y, port, hover);
+            return;
+        }
         // Console/COM sockets are light blue, like the rollover cables that go into them.
         int housing = port.console() ? (hover ? 0xFF4F86A8 : 0xFF35607A) : (hover ? 0xFF6A6E75 : 0xFF4A4D52);
         graphics.fill(x, y, x + socketWidth, y + SOCKET_H, housing);
@@ -187,6 +192,54 @@ public class PortScreen extends Screen {
             String speed = port.speedMbit() >= 1000 ? (port.speedMbit() / 1000) + "G" : port.speedMbit() + "M";
             graphics.text(font, speed, x + (socketWidth - font.width(speed)) / 2, y + SOCKET_H + 13, YELLOW, false);
         }
+    }
+
+    private boolean isUsb(int index) {
+        return DeviceType.byId(view.deviceType()).isUsbPort(index);
+    }
+
+    /** A flat USB-A socket: no LEDs, the plug in the cable's colour. */
+    private void drawUsbSocket(GuiGraphicsExtractor graphics, int x, int y, NetPayloads.PortInfo port, boolean hover) {
+        graphics.fill(x, y, x + socketWidth, y + SOCKET_H, hover ? 0xFF5C5F66 : 0xFF3C3E43);
+        int holeX = x + 5;
+        int holeY = y + 9;
+        int holeW = socketWidth - 10;
+        graphics.fill(holeX, holeY, holeX + holeW, holeY + 8, 0xFF101114);
+        graphics.fill(holeX + 2, holeY + 1, holeX + holeW - 2, holeY + 4, 0xFF2F6FD6);
+        if (port.state() != NetPayloads.PortInfo.FREE) {
+            graphics.fill(holeX - 1, holeY - 2, holeX + holeW + 1, holeY + 10, 0xFF000000 | port.color());
+            graphics.fill(holeX + 1, holeY, holeX + holeW - 1, holeY + 8, 0xFFB8BCC2);
+        }
+        String name = port.name();
+        graphics.text(font, name, x + (socketWidth - font.width(name)) / 2, y + SOCKET_H + 3, port.link() ? GREEN : GRAY, false);
+    }
+
+    private List<Component> tooltip(int index) {
+        NetPayloads.PortInfo port = view.ports().get(index);
+        if (!isUsb(index)) {
+            return tooltip(port);
+        }
+        List<Component> lines = new ArrayList<>();
+        lines.add(Component.literal(port.name()));
+        lines.add(Component.translatable("virtual_mashine.ports.tip.usb"));
+        switch (port.state()) {
+            case NetPayloads.PortInfo.CONNECTED -> {
+                lines.add(Component.translatable("virtual_mashine.ports.tip.connected", port.peer()));
+                lines.add(Component.translatable(port.link() ? "virtual_mashine.ports.tip.link" : "virtual_mashine.ports.tip.no_link"));
+                lines.add(Component.translatable("virtual_mashine.ports.tip.click_unplug"));
+            }
+            case NetPayloads.PortInfo.HALF -> {
+                lines.add(Component.translatable("virtual_mashine.ports.tip.half"));
+                lines.add(Component.translatable("virtual_mashine.ports.tip.click_cancel"));
+            }
+            default -> {
+                lines.add(Component.translatable("virtual_mashine.ports.tip.free"));
+                if (!view.heldCable().isEmpty()) {
+                    lines.add(Component.translatable("virtual_mashine.ports.tip.click_plug"));
+                }
+            }
+        }
+        return lines;
     }
 
     private List<Component> tooltip(NetPayloads.PortInfo port) {

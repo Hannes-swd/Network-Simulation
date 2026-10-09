@@ -19,6 +19,10 @@ public final class ModConfig {
     public String qemuPath = "";
     /** How long a guest gets to shut down by itself when the world closes and freezing is not possible. */
     public int shutdownTimeoutSeconds = 10;
+    /** This game may record the player's microphone while they stand at a microphone block that is on. */
+    public boolean allowMicrophone = true;
+    /** This game may film for camera blocks near the player (an extra small picture of the world now and then). */
+    public boolean allowCamera = true;
 
     /**
      * Capped at 12 s: Minecraft reports a hung shutdown after 15 s when the game window is closed.

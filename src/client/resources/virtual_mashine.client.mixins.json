@@ -4,7 +4,12 @@
   "package": "dev.hannes.virtual_mashine.mixin.client",
   "compatibilityLevel": "JAVA_25",
   "client": [
-    "KeyboardHandlerMixin"
+    "CameraAccessor",
+    "KeyboardHandlerMixin",
+    "LevelRendererAccessor",
+    "MinecraftAccessor",
+    "MinecraftRenderMixin",
+    "MouseHandlerMixin"
   ],
   "injectors": {
     "defaultRequire": 1

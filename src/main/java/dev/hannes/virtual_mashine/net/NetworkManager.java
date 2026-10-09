@@ -37,6 +37,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -64,14 +65,25 @@ public final class NetworkManager {
     private final Path root;
     private final NetworkFabric fabric;
     private final WlanManager wlan;
+    private final MediaHub media;
     private final List<Cable> cables = new CopyOnWriteArrayList<>();
     private final Map<UUID, Placed> devices = new ConcurrentHashMap<>();
     private final Map<UUID, Process> modems = new ConcurrentHashMap<>();
     /** When each modem was last started, so a failing one is not restarted every second. */
     private final Map<UUID, Long> modemStarted = new ConcurrentHashMap<>();
+    /** Firmware of every I/O module that was loaded since the world started. */
+    private final Map<UUID, IoHost> ioHosts = new ConcurrentHashMap<>();
+    /** Hidden uplinks of VMs in "direct" mode, keyed by the VM. */
+    private final Map<UUID, Process> directUplinks = new ConcurrentHashMap<>();
     private final Map<UUID, Pending> pending = new HashMap<>();
     private final Map<UUID, String> syncedDimension = new HashMap<>();
     private final Set<UUID> autoStarted = ConcurrentHashMap.newKeySet();
+    /** Phones found in a player's inventory at the last check. */
+    private final Set<UUID> carriedPhones = new java.util.HashSet<>();
+    /** Phone -> the player carrying it. */
+    private final Map<UUID, UUID> phoneCarriers = new ConcurrentHashMap<>();
+    /** Microphones and cameras switched off at their block. */
+    private final Set<UUID> usbDisabled = ConcurrentHashMap.newKeySet();
     private int ticks;
 
     public NetworkManager(MinecraftServer server, VmManager vms, Path root) throws IOException {
@@ -81,6 +93,8 @@ public final class NetworkManager {
         this.file = root.resolve("cables.json");
         this.fabric = new NetworkFabric();
         this.wlan = new WlanManager(server, this, fabric, root);
+        this.media = new MediaHub(server, this, vms);
+        CompletableFuture.runAsync(UplinkFilter::refreshHostAddresses);
         load();
     }
 
@@ -92,6 +106,10 @@ public final class NetworkManager {
         return wlan;
     }
 
+    public MediaHub media() {
+        return media;
+    }
+
     @Nullable Placed placed(UUID id) {
         return devices.get(id);
     }
@@ -100,6 +118,17 @@ public final class NetworkManager {
         List<UUID> found = new ArrayList<>();
         for (Map.Entry<UUID, Placed> entry : devices.entrySet()) {
             if (entry.getValue().type == type) {
+                found.add(entry.getKey());
+            }
+        }
+        return found;
+    }
+
+    /** Laptops and phones that are somewhere in the world right now. */
+    List<UUID> wirelessClients() {
+        List<UUID> found = new ArrayList<>();
+        for (Map.Entry<UUID, Placed> entry : devices.entrySet()) {
+            if (entry.getValue().type.wirelessOnly()) {
                 found.add(entry.getKey());
             }
         }
@@ -123,6 +152,7 @@ public final class NetworkManager {
                 }
             }
             case MODEM -> ensureModem(id);
+            case IO -> ioModule(id);
             case AP -> {
                 if (!fabric.hasSwitch(id)) {
                     // Port 0 is the LAN socket, ports 1..n are the wireless clients.
@@ -136,6 +166,9 @@ public final class NetworkManager {
                     vms.autoStart(id, type);
                 }
             }
+            case USB -> {
+                // Microphones and cameras are handled by the MediaHub; nothing to keep running here.
+            }
         }
     }
 
@@ -147,8 +180,8 @@ public final class NetworkManager {
         for (int i = 0; i < Math.min(32, type.totalPorts()); i++) {
             PortRef port = new PortRef(id, i);
             Cable cable = cableAt(port);
-            if (cable == null) {
-                continue;
+            if (cable == null || type.isUsbPort(i)) {
+                continue; // USB sockets have no LEDs.
             }
             boolean up = type.isConsolePort(i) ? consoleLink(port, cable) : fabric.hasLink(port);
             if (up) {
@@ -164,13 +197,47 @@ public final class NetworkManager {
 
     public boolean isPowered(UUID id, DeviceType type) {
         return switch (type.kind) {
-            case SWITCH, AP -> devices.containsKey(id);
+            case SWITCH, AP, IO -> devices.containsKey(id);
             case MODEM -> {
                 Process modem = modems.get(id);
                 yield modem != null && modem.isAlive();
             }
             case VM -> vms.isPowered(id);
+            case USB -> {
+                UUID host = usbHost(id);
+                yield devices.containsKey(id) && usbEnabled(id) && host != null && vms.runningMachine(host) != null;
+            }
         };
+    }
+
+    // ---------------------------------------------------------------- USB devices
+
+    /** The computer a microphone or camera is plugged into, or null. */
+    public @Nullable UUID usbHost(UUID device) {
+        Cable cable = cableAt(new PortRef(device, 0));
+        if (cable == null || !cable.cableType().isUsb()) {
+            return null;
+        }
+        Cable.End other = cable.otherEnd(new PortRef(device, 0));
+        return other.type().isUsbDevice() ? null : other.device;
+    }
+
+    public boolean usbEnabled(UUID device) {
+        return !usbDisabled.contains(device);
+    }
+
+    /** The switch on a microphone or camera block (kept by the block). */
+    public void setUsbEnabled(UUID device, boolean enabled) {
+        if (enabled) {
+            usbDisabled.remove(device);
+        } else {
+            usbDisabled.add(device);
+        }
+    }
+
+    /** The player carrying this phone right now, or null. */
+    public @Nullable UUID phoneCarrier(UUID phone) {
+        return phoneCarriers.get(phone);
     }
 
     /** The block is gone: its cables fall off and drop as items. */
@@ -186,6 +253,11 @@ public final class NetworkManager {
         pending.entrySet().removeIf(entry -> entry.getValue().port.device().equals(id));
         wlan.deviceRemoved(id);
         devices.remove(id);
+        IoHost io = ioHosts.remove(id);
+        if (io != null) {
+            fabric.detachHost(new PortRef(id, 0));
+            saveIo(id, io.io()); // The id travels with the dropped block: placed again, it keeps its settings.
+        }
         fabric.removeSwitch(id);
         stopModem(id);
         if (changed) {
@@ -193,6 +265,144 @@ public final class NetworkManager {
             broadcastCables();
         }
         refreshLinks();
+    }
+
+    /** The player stands within {@code range} blocks of this placed device (same dimension). */
+    public boolean isNear(UUID id, ServerPlayer player, double range) {
+        Placed placed = devices.get(id);
+        return placed != null && placed.dimension.equals(dimensionOf(player.level()))
+                && player.distanceToSqr(Vec3.atCenterOf(placed.pos)) <= range * range;
+    }
+
+    // ---------------------------------------------------------------- I/O modules
+
+    /** The module's channels and firmware; created and plugged into the fabric on first use. */
+    public IoModule ioModule(UUID id) {
+        return ioHosts.computeIfAbsent(id, key -> {
+            IoModule module = new IoModule(DeviceMac.of(key, 0), loadIo(key));
+            IoHost host = new IoHost(module, "io-" + key.toString().substring(0, 4));
+            fabric.attachHost(new PortRef(key, 0), host);
+            return host;
+        }).io();
+    }
+
+    private IoModule.Settings loadIo(UUID id) {
+        Path path = root.resolve(id.toString()).resolve("io.json");
+        if (Files.isRegularFile(path)) {
+            try {
+                IoModule.Settings settings = GSON.fromJson(Files.readString(path, StandardCharsets.UTF_8), IoModule.Settings.class);
+                if (settings != null) {
+                    return settings;
+                }
+            } catch (IOException | RuntimeException e) {
+                Virtual_mashine.LOGGER.warn("Could not read I/O module settings {}", path, e);
+            }
+        }
+        return new IoModule.Settings();
+    }
+
+    private void saveIo(UUID id, IoModule module) {
+        try {
+            Path dir = root.resolve(id.toString());
+            Files.createDirectories(dir);
+            Files.writeString(dir.resolve("io.json"), GSON.toJson(module.settings()), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            Virtual_mashine.LOGGER.warn("Could not save I/O module {}", id, e);
+        }
+    }
+
+    public void openIoView(ServerPlayer player, UUID id, BlockPos pos, Direction facing, String message) {
+        devices.put(id, new Placed(DeviceType.IO_MODULE, dimensionOf(player.level()), pos.immutable(), facing));
+        IoModule io = ioModule(id);
+        IoHost host = ioHosts.get(id);
+        int[] levels = new int[IoModule.CHANNELS];
+        for (int ch = 0; ch < IoModule.CHANNELS; ch++) {
+            levels[ch] = io.level(ch);
+        }
+        String address = io.ip() == 0 ? "" : IoModule.formatIp(io.ip()) + "/" + Integer.bitCount(io.mask())
+                + (io.gateway() != 0 ? " · Gateway " + IoModule.formatIp(io.gateway()) : "");
+        ServerPlayNetworking.send(player, new NetPayloads.IoView(id, pos, deviceName(id, DeviceType.IO_MODULE), io.name(), io.mac(),
+                address, fabric.hasLink(new PortRef(id, 0)), io.dhcp(), IoModule.formatIp(io.staticIp()),
+                IoModule.formatIp(io.staticMask()), IoModule.formatIp(io.staticGateway()), io.outputMask(), levels,
+                host == null ? 0 : host.connectionCount(), message));
+    }
+
+    public void handleIoAction(ServerPlayer player, NetPayloads.IoAction action) {
+        Placed placed = devices.get(action.device());
+        if (placed == null || placed.type != DeviceType.IO_MODULE || !placed.dimension.equals(dimensionOf(player.level()))
+                || player.distanceToSqr(Vec3.atCenterOf(placed.pos)) > REACH * REACH) {
+            return;
+        }
+        IoModule io = ioModule(action.device());
+        int ch = action.channel();
+        String message = "";
+        switch (action.action()) {
+            case NetPayloads.IoAction.MODE -> {
+                if (ch >= 0 && ch < IoModule.CHANNELS) {
+                    io.setMode(ch, action.value() == 1);
+                }
+            }
+            case NetPayloads.IoAction.LEVEL -> {
+                if (ch >= 0 && ch < IoModule.CHANNELS) {
+                    io.setOutput(ch, action.value());
+                }
+            }
+            case NetPayloads.IoAction.NETWORK -> {
+                String name = action.name().strip();
+                io.setName(name.length() > 32 ? name.substring(0, 32) : name);
+                int ip = IoModule.parseIp(action.ip());
+                int mask = IoModule.parseIp(action.mask());
+                int gateway = action.gateway().isBlank() ? 0 : IoModule.parseIp(action.gateway());
+                boolean validMask = mask != 0 && Integer.bitCount(mask) == Integer.numberOfLeadingZeros(~mask);
+                if (!action.dhcp() && (ip == 0 || !validMask || (!action.gateway().isBlank() && gateway == 0))) {
+                    message = "virtual_mashine.io.msg.bad_address";
+                } else {
+                    if (action.dhcp() != io.dhcp() || ip != io.staticIp() || mask != io.staticMask() || gateway != io.staticGateway()) {
+                        io.configureNetwork(action.dhcp(), action.dhcp() ? io.staticIp() : ip,
+                                action.dhcp() ? io.staticMask() : mask, action.dhcp() ? io.staticGateway() : gateway);
+                    }
+                    message = "virtual_mashine.io.msg.saved";
+                }
+            }
+            default -> {
+            }
+        }
+        openIoView(player, action.device(), placed.pos, placed.facing, message);
+    }
+
+    // ---------------------------------------------------------------- phones
+
+    /** A player uses this phone: it is where they stand. */
+    public void phoneCarried(UUID id, ServerPlayer player) {
+        devices.put(id, new Placed(DeviceType.PHONE, dimensionOf(player.level()),
+                BlockPos.containing(player.getEyePosition()), player.getDirection()));
+        carriedPhones.add(id);
+        phoneCarriers.put(id, player.getUUID());
+    }
+
+    /**
+     * Phones move with the player carrying them. A phone that is in nobody's inventory (dropped,
+     * in a chest, its player offline) is out of every WLAN's reach.
+     */
+    private void trackPhones() {
+        Set<UUID> seen = new java.util.HashSet<>();
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            var inventory = player.getInventory();
+            for (int slot = 0; slot < inventory.getContainerSize(); slot++) {
+                ItemStack stack = inventory.getItem(slot);
+                UUID id = stack.is(ModRegistry.PHONE) ? stack.get(ModRegistry.PC_ID) : null;
+                if (id != null && seen.add(id)) {
+                    phoneCarried(id, player);
+                }
+            }
+        }
+        for (UUID id : carriedPhones) {
+            if (!seen.contains(id)) {
+                devices.remove(id);
+                phoneCarriers.remove(id);
+            }
+        }
+        carriedPhones.retainAll(seen);
     }
 
     // ---------------------------------------------------------------- VM integration
@@ -206,7 +416,7 @@ public final class NetworkManager {
         if (!running) {
             fabric.closeUdpPorts(id);
         }
-        server.execute(this::refreshLinks);
+        vms.runOnServer(this::refreshLinks);
     }
 
     /** Pushes "cable plugged/unplugged" to the network cards and serial ports of all running VMs. */
@@ -236,6 +446,13 @@ public final class NetworkManager {
         return other == null ? null : other.serial();
     }
 
+    /** A USB device works while the computer it hangs on runs. */
+    private boolean usbLink(PortRef port, Cable cable) {
+        Cable.End other = cable.otherEnd(port);
+        UUID host = other.type().isUsbDevice() ? port.device() : other.device;
+        return vms.runningMachine(host) != null;
+    }
+
     private boolean consoleLink(PortRef port, Cable cable) {
         Cable.End other = cable.otherEnd(port);
         return vms.runningMachine(port.device()) != null && vms.runningMachine(other.device) != null;
@@ -243,7 +460,7 @@ public final class NetworkManager {
 
     /** Connects a new or loaded cable in the fabric (network cables only; consoles are linked in refreshLinks). */
     private void wire(Cable cable) {
-        if (!cable.cableType().isConsole()) {
+        if (cable.cableType().isNetwork()) {
             fabric.connect(cable.a.ref(), cable.b.ref(), cable.cableType().speedMbit(cable.length()));
         }
     }
@@ -282,7 +499,7 @@ public final class NetworkManager {
 
     public void handleWlanAction(ServerPlayer player, NetPayloads.WlanAction action) {
         Placed placed = devices.get(action.device());
-        if (placed == null || placed.type != DeviceType.LAPTOP || !placed.dimension.equals(dimensionOf(player.level()))
+        if (placed == null || !placed.type.wirelessOnly() || !placed.dimension.equals(dimensionOf(player.level()))
                 || player.distanceToSqr(Vec3.atCenterOf(placed.pos)) > REACH * REACH * 4) {
             return;
         }
@@ -317,7 +534,7 @@ public final class NetworkManager {
     /** The "Anschlüsse" button of a computer's control panel. */
     public void openPortViewOf(ServerPlayer player, UUID id) {
         Placed placed = devices.get(id);
-        if (placed != null && placed.type == DeviceType.LAPTOP) {
+        if (placed != null && placed.type.wirelessOnly()) {
             openWlanView(player, id, "");
             return;
         }
@@ -361,8 +578,10 @@ public final class NetworkManager {
             return "virtual_mashine.ports.msg.wireless";
         }
         boolean consolePort = placed.type.isConsolePort(port.port());
-        if (item.cableType.isConsole() != consolePort) {
-            return consolePort ? "virtual_mashine.ports.msg.needs_console_cable" : "virtual_mashine.ports.msg.needs_network_cable";
+        boolean usbPort = placed.type.isUsbPort(port.port());
+        if (item.cableType.isConsole() != consolePort || item.cableType.isUsb() != usbPort) {
+            return usbPort ? "virtual_mashine.ports.msg.needs_usb_cable"
+                    : consolePort ? "virtual_mashine.ports.msg.needs_console_cable" : "virtual_mashine.ports.msg.needs_network_cable";
         }
         Pending start = pending.get(player.getUUID());
         if (start == null) {
@@ -376,6 +595,9 @@ public final class NetworkManager {
         }
         if (!start.dimension.equals(placed.dimension)) {
             return "virtual_mashine.ports.msg.other_dimension";
+        }
+        if (start.cable.isUsb() && start.deviceType.isUsbDevice() == placed.type.isUsbDevice()) {
+            return "virtual_mashine.ports.msg.usb_pair"; // One end in a microphone or camera, the other in a computer.
         }
         Cable cable = new Cable();
         cable.id = UUID.randomUUID();
@@ -444,8 +666,9 @@ public final class NetworkManager {
         for (int i = 0; i < type.totalPorts(); i++) {
             PortRef port = new PortRef(id, i);
             boolean console = type.isConsolePort(i);
+            boolean usb = type.isUsbPort(i);
             String name = portLabel(type, i, role);
-            String mac = type.isVm() && !console ? DeviceMac.of(id, i) : "";
+            String mac = type.isVm() && !console && !usb ? DeviceMac.of(id, i) : "";
             Cable cable = cableAt(port);
             NetworkFabric.PortStats stats = fabric.stats(port);
             boolean activity = now - stats.lastActivity < ACTIVITY_NANOS && stats.lastActivity != 0;
@@ -461,7 +684,7 @@ public final class NetworkManager {
             if (cable != null) {
                 Cable.End other = cable.otherEnd(port);
                 String peer = deviceName(other.device, other.type()) + " · " + other.type().portName(other.port);
-                boolean link = console ? consoleLink(port, cable) : fabric.hasLink(port);
+                boolean link = console ? consoleLink(port, cable) : usb ? usbLink(port, cable) : fabric.hasLink(port);
                 int speed = link ? cable.cableType().speedMbit(cable.length()) : 0;
                 ports.add(new NetPayloads.PortInfo(name, NetPayloads.PortInfo.CONNECTED, link, activity && link, peer, cable.type,
                         cable.color, (int) Math.round(cable.length()), console, mac, speed, rx, tx));
@@ -482,7 +705,7 @@ public final class NetworkManager {
     /** Port name, with the role OpenWrt gave it after the automatic set-up. */
     private static String portLabel(DeviceType type, int port, String role) {
         String name = type.portName(port);
-        if (role.equals("router") && !type.isConsolePort(port)) {
+        if (role.equals("router") && !type.isConsolePort(port) && !type.isUsbPort(port)) {
             return name + (port == 1 ? " WAN" : " LAN");
         }
         return name;
@@ -495,7 +718,16 @@ public final class NetworkManager {
         String kind = switch (type) {
             case SWITCH -> "Switch";
             case MODEM -> "Modem";
+            case MICROPHONE -> "Mikrofon";
+            case CAMERA -> "Kamera";
             case ACCESS_POINT -> "Access Point";
+            case IO_MODULE -> {
+                IoHost io = ioHosts.get(id);
+                if (io != null && !io.io().name().isEmpty()) {
+                    yield io.io().name();
+                }
+                yield "I/O-Modul";
+            }
             default -> type.id;
         };
         return kind + " " + id.toString().substring(0, 4).toUpperCase(Locale.ROOT);
@@ -504,8 +736,18 @@ public final class NetworkManager {
     // ---------------------------------------------------------------- held cable & sync
 
     public void tick() {
+        media.tick();
         if (++ticks % 20 != 0) {
             return;
+        }
+        if (ticks % 1200 == 0) {
+            CompletableFuture.runAsync(UplinkFilter::refreshHostAddresses);
+        }
+        trackPhones();
+        for (Map.Entry<UUID, IoHost> entry : ioHosts.entrySet()) {
+            if (entry.getValue().io().takeDirty()) {
+                saveIo(entry.getKey(), entry.getValue().io());
+            }
         }
         wlan.tick();
         // Cheap safety net: carrier states only change on the guest when they differ.
@@ -529,6 +771,8 @@ public final class NetworkManager {
     public void onPlayerLeft(UUID player) {
         pending.remove(player);
         syncedDimension.remove(player);
+        phoneCarriers.values().removeIf(player::equals);
+        media.onPlayerLeft(player);
     }
 
     private void sendHeldCable(ServerPlayer player) {
@@ -582,25 +826,74 @@ public final class NetworkManager {
             return;
         }
         try {
-            NetworkFabric.UdpBinding binding = fabric.openUdpPorts(id, 1)[0];
             Path dir = root.resolve(id.toString());
             Files.createDirectories(dir);
-            List<String> command = List.of(qemu.toString(), "-M", "none", "-nodefaults", "-display", "none",
-                    "-monitor", "none", "-serial", "none",
-                    "-netdev", "dgram,id=lan,local.type=inet,local.host=127.0.0.1,local.port=" + binding.qemuPort()
-                            + ",remote.type=inet,remote.host=127.0.0.1,remote.port=" + binding.modPort(),
-                    "-netdev", "user,id=wan,net=192.168.178.0/24,host=192.168.178.1,dhcpstart=192.168.178.20,dns=192.168.178.2",
-                    "-netdev", "hubport,id=h1,hubid=0,netdev=lan",
-                    "-netdev", "hubport,id=h2,hubid=0,netdev=wan");
-            Process process = new ProcessBuilder(command).directory(dir.toFile()).redirectErrorStream(true)
-                    .redirectOutput(dir.resolve("modem.log").toFile()).start();
-            modems.put(id, process);
-            VmManager.trackProcess(process);
+            modems.put(id, startUplink(qemu, id, dir.resolve("modem.log")));
             refreshLinks();
         } catch (IOException e) {
             Virtual_mashine.LOGGER.warn("Could not start the internet modem {}", id, e);
             fabric.closeUdpPorts(id);
         }
+    }
+
+    /**
+     * Starts QEMU's user-mode NAT on its own and plugs it into port 0 of {@code id} in the fabric.
+     * Everything a VM sends towards it passes the {@link UplinkFilter}.
+     */
+    private Process startUplink(Path qemu, UUID id, Path log) throws IOException {
+        NetworkFabric.UdpBinding binding = fabric.openUdpPorts(id, 1)[0];
+        fabric.markUplink(new PortRef(id, 0));
+        List<String> command = List.of(qemu.toString(), "-M", "none", "-nodefaults", "-display", "none",
+                "-monitor", "none", "-serial", "none",
+                "-netdev", "dgram,id=lan,local.type=inet,local.host=127.0.0.1,local.port=" + binding.qemuPort()
+                        + ",remote.type=inet,remote.host=127.0.0.1,remote.port=" + binding.modPort(),
+                "-netdev", "user,id=wan,net=192.168.178.0/24,host=192.168.178.1,dhcpstart=192.168.178.20,dns=192.168.178.2",
+                "-netdev", "hubport,id=h1,hubid=0,netdev=lan",
+                "-netdev", "hubport,id=h2,hubid=0,netdev=wan");
+        Process process = new ProcessBuilder(command).directory(log.getParent().toFile()).redirectErrorStream(true)
+                .redirectOutput(log.toFile()).start();
+        VmManager.trackProcess(process);
+        return process;
+    }
+
+    /**
+     * "Direct" network mode: the VM's only card gets a private uplink of its own, wired invisibly,
+     * so it is online without cables but behind the same filter as every modem.
+     */
+    public NetworkFabric.UdpBinding openDirectUplink(UUID vm, Path dir) throws IOException {
+        closeDirectUplink(vm);
+        Path qemu = QemuLocator.findSystemEmulator();
+        if (qemu == null) {
+            throw new IOException("QEMU not found");
+        }
+        UUID uplink = directUplinkId(vm);
+        NetworkFabric.UdpBinding card = fabric.openUdpPorts(vm, 1)[0];
+        try {
+            directUplinks.put(vm, startUplink(qemu, uplink, dir.resolve("uplink.log")));
+        } catch (IOException e) {
+            fabric.closeUdpPorts(vm);
+            fabric.closeUdpPorts(uplink);
+            throw e;
+        }
+        fabric.connect(new PortRef(vm, 0), new PortRef(uplink, 0), 0);
+        return card;
+    }
+
+    public void closeDirectUplink(UUID vm) {
+        Process process = directUplinks.remove(vm);
+        if (process != null) {
+            process.destroyForcibly();
+            VmManager.untrackProcess(process);
+        }
+        UUID uplink = directUplinkId(vm);
+        if (fabric.peer(new PortRef(uplink, 0)) != null) {
+            fabric.disconnect(new PortRef(uplink, 0));
+        }
+        fabric.closeUdpPorts(uplink);
+    }
+
+    private static UUID directUplinkId(UUID vm) {
+        return UUID.nameUUIDFromBytes(("direct-uplink:" + vm).getBytes(StandardCharsets.UTF_8));
     }
 
     private void stopModem(UUID id) {
@@ -614,8 +907,15 @@ public final class NetworkManager {
     }
 
     public void close() {
+        media.close();
         for (UUID id : List.copyOf(modems.keySet())) {
             stopModem(id);
+        }
+        for (UUID vm : List.copyOf(directUplinks.keySet())) {
+            closeDirectUplink(vm);
+        }
+        for (Map.Entry<UUID, IoHost> entry : ioHosts.entrySet()) {
+            saveIo(entry.getKey(), entry.getValue().io());
         }
         save();
         fabric.close();
@@ -655,7 +955,7 @@ public final class NetworkManager {
         return stack;
     }
 
-    private static String dimensionOf(ServerLevel level) {
+    static String dimensionOf(ServerLevel level) {
         return level.dimension().identifier().toString();
     }
 

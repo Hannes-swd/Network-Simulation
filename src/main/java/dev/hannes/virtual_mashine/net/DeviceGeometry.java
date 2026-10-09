@@ -23,7 +23,17 @@ public final class DeviceGeometry {
         Direction left = face.getClockWise();
         double offset = type.ports <= 1 ? 0 : type.socketSpread / 2 - type.socketSpread * port / (type.ports - 1);
         double depth = type.socketDepth + 0.02;
-        if (type.isConsolePort(port)) {
+        double y = type.socketY;
+        if (type.isUsbPort(port)) {
+            // A USB device has its plug in the middle of its back; computers have a row of USB sockets
+            // on the other side of the console port, a little lower where the network socket is high up.
+            offset = type.isUsbDevice() ? 0 : 0.14 + 0.08 * type.usbIndex(port);
+            y = switch (type) {
+                case SERVER -> type.socketY - 0.14;
+                case DISPLAY -> type.socketY - 0.2;
+                default -> type.socketY;
+            };
+        } else if (type.isConsolePort(port)) {
             if (type.portsOnFront) {
                 // Switches and routers have their console socket in the middle of the back.
                 face = facing.getOpposite();
@@ -36,7 +46,7 @@ public final class DeviceGeometry {
         }
         return new Vec3(
                 pos.getX() + 0.5 + face.getStepX() * depth + left.getStepX() * offset,
-                pos.getY() + type.socketY,
+                pos.getY() + y,
                 pos.getZ() + 0.5 + face.getStepZ() * depth + left.getStepZ() * offset);
     }
 }

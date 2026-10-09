@@ -8,6 +8,10 @@
     "virtual_mashine:switch",
     "virtual_mashine:modem",
     "virtual_mashine:laptop",
-    "virtual_mashine:access_point"
+    "virtual_mashine:access_point",
+    "virtual_mashine:io_module",
+    "virtual_mashine:display",
+    "virtual_mashine:microphone",
+    "virtual_mashine:camera"
   ]
 }

@@ -7,16 +7,20 @@ import java.io.IOException;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.ClosedSelectorException;
 import java.nio.channels.DatagramChannel;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 
 /**
  * The physical layer: every network card of every QEMU process sends its Ethernet frames as UDP
@@ -27,6 +31,20 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class NetworkFabric {
     /** Frames are not allowed to cross more switches than this (protects against switching loops). */
     private static final int MAX_HOPS = 16;
+
+    /**
+     * A device whose network card is part of the mod itself (the I/O module's firmware). All three
+     * methods are called on the fabric thread only.
+     */
+    public interface Host {
+        /** @param send puts a frame on this host's cable; @param link whether that cable leads to a powered device */
+        void attach(Consumer<byte[]> send, BooleanSupplier link);
+
+        void receive(byte[] frame);
+
+        /** About ten times a second, for timers. */
+        void tick(long nowMillis);
+    }
 
     /** Socket pair of one QEMU network card: QEMU listens on {@code qemuPort}, the mod on {@code modPort}. */
     public record UdpBinding(int qemuPort, int modPort) {
@@ -67,6 +85,10 @@ public final class NetworkFabric {
     private final Map<PortRef, UdpEndpoint> udp = new ConcurrentHashMap<>();
     private final Map<UUID, LearningSwitch> switches = new ConcurrentHashMap<>();
     private final Map<PortRef, PortStats> stats = new ConcurrentHashMap<>();
+    private final Map<PortRef, Host> hosts = new ConcurrentHashMap<>();
+    private long lastHostTick;
+    /** Ports of internet uplinks: frames into them pass the {@link UplinkFilter}. */
+    private final Set<PortRef> uplinks = ConcurrentHashMap.newKeySet();
     /** Line rate of each direction of a cable, keyed by the sending port. Fabric thread only after creation. */
     private final Map<PortRef, TokenBucket> limits = new ConcurrentHashMap<>();
 
@@ -130,6 +152,20 @@ public final class NetworkFabric {
         return bindings;
     }
 
+    public void attachHost(PortRef port, Host host) {
+        host.attach(frame -> transmit(port, frame, 0), () -> hasLink(port));
+        hosts.put(port, host);
+    }
+
+    public void detachHost(PortRef port) {
+        hosts.remove(port);
+    }
+
+    /** The internet side of a modem: only public internet traffic may enter it. */
+    public void markUplink(PortRef port) {
+        uplinks.add(port);
+    }
+
     public void closeUdpPorts(UUID device) {
         for (PortRef ref : udp.keySet()) {
             if (ref.device().equals(device)) {
@@ -179,7 +215,7 @@ public final class NetworkFabric {
 
     /** The device behind this port has power and a network card listening. */
     public boolean isPowered(PortRef port) {
-        return udp.containsKey(port) || switches.containsKey(port.device());
+        return udp.containsKey(port) || hosts.containsKey(port) || switches.containsKey(port.device());
     }
 
     /** Link LED: cable plugged in and both ends powered. */
@@ -211,10 +247,17 @@ public final class NetworkFabric {
         ByteBuffer buffer = ByteBuffer.allocateDirect(65536);
         while (running) {
             try {
-                selector.select(200);
+                selector.select(100);
                 Runnable task;
                 while ((task = tasks.poll()) != null) {
                     task.run();
+                }
+                long now = System.currentTimeMillis();
+                if (now - lastHostTick >= 100) {
+                    lastHostTick = now;
+                    for (Host host : hosts.values()) {
+                        host.tick(now);
+                    }
                 }
                 for (SelectionKey key : selector.selectedKeys()) {
                     if (!key.isValid() || !(key.attachment() instanceof UdpEndpoint endpoint)) {
@@ -222,8 +265,12 @@ public final class NetworkFabric {
                     }
                     while (true) {
                         buffer.clear();
-                        if (endpoint.channel.receive(buffer) == null) {
+                        SocketAddress sender = endpoint.channel.receive(buffer);
+                        if (sender == null) {
                             break;
+                        }
+                        if (!endpoint.qemu.equals(sender)) {
+                            continue; // Only this card's own QEMU process may put frames on its cable.
                         }
                         buffer.flip();
                         byte[] frame = new byte[buffer.remaining()];
@@ -263,7 +310,15 @@ public final class NetworkFabric {
 
         UdpEndpoint endpoint = udp.get(to);
         if (endpoint != null) {
+            if (uplinks.contains(to) && !UplinkFilter.allows(frame)) {
+                return;
+            }
             endpoint.send(frame);
+            return;
+        }
+        Host host = hosts.get(to);
+        if (host != null) {
+            host.receive(frame);
             return;
         }
         LearningSwitch sw = switches.get(to.device());
@@ -287,6 +342,7 @@ public final class NetworkFabric {
     }
 
     private void closeUdp(PortRef ref) {
+        uplinks.remove(ref);
         UdpEndpoint endpoint = udp.remove(ref);
         if (endpoint != null) {
             try {

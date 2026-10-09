@@ -128,7 +128,7 @@ public final class WlanManager {
                 NetworkManager.Placed laptop = network.placed(entry.getKey());
                 NetworkManager.Placed point = network.placed(ap);
                 int dbm = laptop == null || point == null ? -99 : (int) Math.round(signal(point, laptop));
-                clients.add(network.nameOf(entry.getKey(), DeviceType.LAPTOP) + "  " + dbm + " dBm · " + entry.getValue().mbit + " Mbit/s");
+                clients.add(network.nameOf(entry.getKey(), laptop == null ? DeviceType.LAPTOP : laptop.type()) + "  " + dbm + " dBm · " + entry.getValue().mbit + " Mbit/s");
             }
         }
         return clients;
@@ -215,11 +215,11 @@ public final class WlanManager {
 
     /** Once a second: keep, improve, drop or create associations. */
     void tick() {
-        for (UUID laptop : network.devicesOfType(DeviceType.LAPTOP)) {
+        for (UUID laptop : network.wirelessClients()) {
             NetworkManager.Placed here = network.placed(laptop);
             Profile profile = store.laptops.get(laptop);
             Association current = associations.get(laptop);
-            if (here == null || profile == null || !network.isPowered(laptop, DeviceType.LAPTOP)) {
+            if (here == null || profile == null || !network.isPowered(laptop, here.type())) {
                 if (current != null) {
                     drop(laptop);
                 }

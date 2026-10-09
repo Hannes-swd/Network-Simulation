@@ -1,5 +1,6 @@
 package dev.hannes.virtual_mashine.client;
 
+import dev.hannes.virtual_mashine.client.screen.DisplaySettingsScreen;
 import dev.hannes.virtual_mashine.client.screen.PcControlScreen;
 import dev.hannes.virtual_mashine.client.screen.PcDisplayScreen;
 import dev.hannes.virtual_mashine.client.screen.PcScreen;
@@ -21,6 +22,10 @@ public final class ClientPcState {
             return;
         }
         if (info.open()) {
+            if (info.configJson().contains("\"type\": \"display\"")) {
+                minecraft.setScreen(new DisplaySettingsScreen(info));
+                return;
+            }
             minecraft.setScreen(PcScreen.isRunning(info) ? new PcDisplayScreen(info) : new PcControlScreen(info));
         }
     }

@@ -7,6 +7,7 @@ import dev.hannes.virtual_mashine.device.CableType;
 import dev.hannes.virtual_mashine.device.DeviceType;
 import dev.hannes.virtual_mashine.item.CableItem;
 import dev.hannes.virtual_mashine.item.NetworkTesterItem;
+import dev.hannes.virtual_mashine.item.PhoneItem;
 import net.fabricmc.fabric.api.creativetab.v1.FabricCreativeModeTab;
 import net.fabricmc.fabric.api.object.builder.v1.block.entity.FabricBlockEntityTypeBuilder;
 import net.minecraft.core.Registry;
@@ -62,6 +63,12 @@ public final class ModRegistry {
     public static final Block MODEM_BLOCK = device(DeviceType.MODEM, Block.box(4, 0, 4, 12, 7, 12), MapColor.SNOW, 3);
     public static final Block LAPTOP_BLOCK = device(DeviceType.LAPTOP, Block.box(2, 0, 2, 14, 9, 14), MapColor.COLOR_GRAY, 5);
     public static final Block ACCESS_POINT_BLOCK = device(DeviceType.ACCESS_POINT, Block.box(4, 0, 4, 12, 3, 12), MapColor.SNOW, 3);
+    public static final Block IO_MODULE_BLOCK = device(DeviceType.IO_MODULE, Shapes.block(), MapColor.COLOR_LIGHT_GRAY, 2);
+    public static final Block DISPLAY_BLOCK = device(DeviceType.DISPLAY, Shapes.block(), MapColor.COLOR_BLACK, 4);
+    public static final Block MICROPHONE_BLOCK = device(DeviceType.MICROPHONE,
+            Shapes.or(Block.box(5, 0, 5, 11, 1, 11), Block.box(7, 1, 7, 9, 7, 9), Block.box(6, 7, 6, 10, 12, 10)), MapColor.COLOR_GRAY, 0);
+    public static final Block CAMERA_BLOCK = device(DeviceType.CAMERA,
+            Shapes.or(Block.box(6, 0, 6, 10, 3, 10), Block.box(4, 3, 4, 12, 9, 12)), MapColor.COLOR_BLACK, 1);
 
     public static final Item PC_ITEM = DEVICE_ITEMS.get(DeviceType.PC);
 
@@ -72,6 +79,7 @@ public final class ModRegistry {
     }
 
     public static final Item NETWORK_TESTER = item("network_tester", NetworkTesterItem::new);
+    public static final Item PHONE = item("phone", properties -> new PhoneItem(properties.stacksTo(1)));
 
     /** Registry id stays "pc" so PCs from earlier versions keep their machine. */
     public static final BlockEntityType<DeviceBlockEntity> DEVICE_BLOCK_ENTITY = Registry.register(
@@ -87,10 +95,12 @@ public final class ModRegistry {
     /** One creative tab per category, like the vanilla ones. */
     public static void register() {
         tab("devices", DEVICE_ITEMS.get(DeviceType.PC), DEVICE_ITEMS.get(DeviceType.PC), DEVICE_ITEMS.get(DeviceType.LAPTOP),
-                DEVICE_ITEMS.get(DeviceType.SERVER));
+                PHONE, DEVICE_ITEMS.get(DeviceType.SERVER), DEVICE_ITEMS.get(DeviceType.MICROPHONE), DEVICE_ITEMS.get(DeviceType.CAMERA));
         tab("network_devices", DEVICE_ITEMS.get(DeviceType.SWITCH), DEVICE_ITEMS.get(DeviceType.SWITCH),
                 DEVICE_ITEMS.get(DeviceType.MANAGED_SWITCH), DEVICE_ITEMS.get(DeviceType.ROUTER), DEVICE_ITEMS.get(DeviceType.ACCESS_POINT));
         tab("internet", DEVICE_ITEMS.get(DeviceType.MODEM), DEVICE_ITEMS.get(DeviceType.MODEM));
+        tab("automation", DEVICE_ITEMS.get(DeviceType.IO_MODULE), DEVICE_ITEMS.get(DeviceType.IO_MODULE),
+                DEVICE_ITEMS.get(DeviceType.DISPLAY));
         java.util.List<Item> cablesAndTools = new java.util.ArrayList<>(CABLES.values());
         cablesAndTools.add(NETWORK_TESTER);
         tab("cables", CABLES.get(CableType.CAT6), cablesAndTools.toArray(new Item[0]));
@@ -118,6 +128,8 @@ public final class ModRegistry {
                         .sound(SoundType.METAL)
                         .requiresCorrectToolForDrops()
                         .noOcclusion()
+                        // Not a conductor: an I/O module's faces carry exactly their own channel, nothing passes through.
+                        .isRedstoneConductor((state, level, pos) -> false)
                         .lightLevel(state -> state.getValue(DeviceBlock.LIT) ? light : 0));
         ResourceKey<Item> itemKey = ResourceKey.create(Registries.ITEM, Virtual_mashine.id(type.id));
         Item item = Registry.register(BuiltInRegistries.ITEM, itemKey,

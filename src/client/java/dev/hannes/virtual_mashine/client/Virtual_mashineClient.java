@@ -3,7 +3,17 @@ package dev.hannes.virtual_mashine.client;
 import dev.hannes.virtual_mashine.ModRegistry;
 import dev.hannes.virtual_mashine.client.net.CableRenderer;
 import dev.hannes.virtual_mashine.client.net.DeviceLedRenderer;
+import dev.hannes.virtual_mashine.client.display.DisplayManager;
+import dev.hannes.virtual_mashine.client.media.CameraCapture;
+import dev.hannes.virtual_mashine.client.media.MicCapture;
+import dev.hannes.virtual_mashine.client.media.VmSound;
+import dev.hannes.virtual_mashine.network.MediaPayloads;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
+import dev.hannes.virtual_mashine.Virtual_mashine;
 import dev.hannes.virtual_mashine.client.screen.AccessPointScreen;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import dev.hannes.virtual_mashine.client.screen.IoModuleScreen;
 import dev.hannes.virtual_mashine.client.screen.PortScreen;
 import dev.hannes.virtual_mashine.client.screen.WlanScreen;
 import dev.hannes.virtual_mashine.client.vnc.TunnelTransport;
@@ -44,7 +54,26 @@ public class Virtual_mashineClient implements ClientModInitializer {
                 minecraft.setScreen(new AccessPointScreen(payload));
             }
         });
+        ClientPlayNetworking.registerGlobalReceiver(NetPayloads.IoView.TYPE, (payload, context) -> {
+            Minecraft minecraft = context.client();
+            if (minecraft.screen instanceof IoModuleScreen screen && screen.deviceId().equals(payload.device())) {
+                screen.update(payload);
+            } else {
+                minecraft.setScreen(new IoModuleScreen(payload));
+            }
+        });
+        ClientPlayNetworking.registerGlobalReceiver(MediaPayloads.VmAudio.TYPE, (payload, context) -> VmSound.onAudio(payload));
+        ClientPlayNetworking.registerGlobalReceiver(MediaPayloads.MicState.TYPE, (payload, context) -> MicCapture.onState(payload));
+        ClientPlayNetworking.registerGlobalReceiver(MediaPayloads.CameraJob.TYPE, (payload, context) -> CameraCapture.onJob(payload));
+        ClientTickEvents.END_CLIENT_TICK.register(DisplayManager::tick);
+        ClientTickEvents.END_CLIENT_TICK.register(VmSound::tick);
+        ClientTickEvents.END_CLIENT_TICK.register(MicCapture::tick);
+        HudElementRegistry.attachElementAfter(VanillaHudElements.MISC_OVERLAYS, Virtual_mashine.id("microphone"), MicCapture::hud);
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+            DisplayManager.disconnectAll();
+            VmSound.stopAll();
+            MicCapture.reset();
+            CameraCapture.reset();
             TunnelTransport.closeAll();
             CableRenderer.clear();
         });

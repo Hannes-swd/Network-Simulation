@@ -17,9 +17,19 @@ public enum DeviceType {
     /** Notebook: a computer with only a WLAN card (port 0 has no socket). */
     LAPTOP("laptop", Kind.VM, 1, "wlan", 0, false, 4096, 2, false, 0.30, 0.05, 0.0),
     /** WLAN access point: bridges its wireless clients to its LAN port. */
-    ACCESS_POINT("access_point", Kind.AP, 1, "LAN", -1, true, 0, 0, false, 0.25, 0.09, 0.0);
+    ACCESS_POINT("access_point", Kind.AP, 1, "LAN", -1, true, 0, 0, false, 0.25, 0.09, 0.0),
+    /** Smartphone with Android: an item the player carries, WLAN only. */
+    PHONE("phone", Kind.VM, 1, "wlan", 0, false, 3072, 2, false, 0.0, 0.0, 0.0),
+    /** Network I/O module: reads and drives redstone on each face, controlled by Modbus TCP or HTTP. */
+    IO_MODULE("io_module", Kind.IO, 1, "LAN", -1, true, 0, 0, false, 0.5, 0.5, 0.0),
+    /** Network display: a small kiosk computer showing one web page on its front, used by looking and clicking. */
+    DISPLAY("display", Kind.VM, 1, "LAN", -1, true, 1024, 1, false, 0.5, 0.5, 0.0),
+    /** USB microphone: what players near it say goes to the computer's sound card as line-in. */
+    MICROPHONE("microphone", Kind.USB, 0, "USB", -1, true, 0, 0, false, 0.16, 0.06, 0.0),
+    /** USB webcam: films the world in front of it for the computer (a video device in Linux). */
+    CAMERA("camera", Kind.USB, 0, "USB", -1, true, 0, 0, false, 0.19, 0.14, 0.0);
 
-    public enum Kind { VM, SWITCH, MODEM, AP }
+    public enum Kind { VM, SWITCH, MODEM, AP, IO, USB }
 
     /** How many wireless clients one access point carries. */
     public static final int AP_CLIENT_SLOTS = 16;
@@ -62,19 +72,49 @@ public enum DeviceType {
         return kind == Kind.VM;
     }
 
-    /** Every machine with an operating system also has a serial port (console / COM1); laptops have none. */
+    /** Every machine with an operating system also has a serial port (console / COM1); laptops and phones have none. */
     public boolean hasConsole() {
-        return isVm() && this != LAPTOP;
+        return isVm() && !wirelessOnly() && this != DISPLAY;
     }
 
-    /** The laptop's WLAN card: it is connected through the WLAN menu, not with a cable. */
+    /** Laptop and phone: their only network card is WLAN, connected through the WLAN menu. */
+    public boolean wirelessOnly() {
+        return this == LAPTOP || this == PHONE;
+    }
+
+    /** The WLAN card of a laptop or phone: it is connected through the WLAN menu, not with a cable. */
     public boolean isWirelessPort(int port) {
-        return this == LAPTOP && port == 0;
+        return wirelessOnly() && port == 0;
     }
 
-    /** Network ports plus the serial port. */
+    /** USB sockets: computers have some for microphones and cameras, a USB device has its one plug. */
+    public int usbPorts() {
+        return switch (this) {
+            case PC -> 4;
+            case SERVER, LAPTOP, DISPLAY -> 2;
+            case MICROPHONE, CAMERA -> 1;
+            default -> 0;
+        };
+    }
+
+    /** A microphone or camera: it hangs on a computer's USB port. */
+    public boolean isUsbDevice() {
+        return kind == Kind.USB;
+    }
+
+    /** Network ports, the serial port, then the USB ports. */
     public int totalPorts() {
-        return ports + (hasConsole() ? 1 : 0);
+        return ports + (hasConsole() ? 1 : 0) + usbPorts();
+    }
+
+    public boolean isUsbPort(int port) {
+        int first = ports + (hasConsole() ? 1 : 0);
+        return port >= first && port < first + usbPorts();
+    }
+
+    /** 0 for the first USB socket. */
+    public int usbIndex(int port) {
+        return port - ports - (hasConsole() ? 1 : 0);
     }
 
     public boolean isConsolePort(int port) {
@@ -83,6 +123,9 @@ public enum DeviceType {
 
     /** What the port is called on the device's housing, e.g. "eth0", "Port 3" or "Console". */
     public String portName(int port) {
+        if (isUsbPort(port)) {
+            return isUsbDevice() ? "USB" : "USB " + (usbIndex(port) + 1);
+        }
         if (isConsolePort(port)) {
             return this == PC || this == SERVER ? "COM1" : "Console";
         }

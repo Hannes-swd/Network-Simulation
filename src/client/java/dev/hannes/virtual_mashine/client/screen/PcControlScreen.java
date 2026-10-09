@@ -43,6 +43,7 @@ public class PcControlScreen extends PcScreen {
     private CycleButton<Boolean> bootButton;
     private CycleButton<Boolean> accelButton;
     private CycleButton<Boolean> soundButton;
+    private CycleButton<Boolean> clipboardButton;
     private CycleButton<String> networkButton;
     private CycleButton<Boolean> autoStartButton;
     private CycleButton<String> nicButton;
@@ -139,12 +140,21 @@ public class PcControlScreen extends PcScreen {
                     markDirty();
                 });
         addRenderableWidget(accelButton);
+        int soundWidth = (half - 4) / 2;
         soundButton = CycleButton.onOffBuilder(config.sound)
-                .create(right, y, half, 20, Component.translatable("virtual_mashine.option.sound"), (button, v) -> {
+                .create(right, y, soundWidth, 20, Component.translatable("virtual_mashine.option.sound"), (button, v) -> {
                     config.sound = v;
                     markDirty();
                 });
         addRenderableWidget(soundButton);
+        clipboardButton = CycleButton.onOffBuilder(config.clipboardSharing)
+                .withTooltip(v -> Tooltip.create(Component.translatable("virtual_mashine.option.clipboard.tooltip")))
+                .create(right + soundWidth + 4, y, half - soundWidth - 4, 20, Component.translatable("virtual_mashine.option.clipboard"),
+                        (button, v) -> {
+                            config.clipboardSharing = v;
+                            markDirty();
+                        });
+        addRenderableWidget(clipboardButton);
         y += ROW;
 
         networkButton = CycleButton.<String>builder(mode -> Component.translatable("virtual_mashine.option.network." + mode), config.netMode)
@@ -162,7 +172,7 @@ public class PcControlScreen extends PcScreen {
                         ? "virtual_mashine.button.iso_folder.tooltip" : "virtual_mashine.button.iso_folder.host_only")))
                 .build());
         isoFolderButton.active = isHost();
-        boolean laptop = "laptop".equals(config.type);
+        boolean laptop = "laptop".equals(config.type) || "phone".equals(config.type);
         addRenderableWidget(Button.builder(Component.translatable(laptop ? "virtual_mashine.button.wlan" : "virtual_mashine.button.ports"), b -> openPorts())
                 .bounds(right + quarterWidth + 4, y, half - quarterWidth - 4, 20)
                 .tooltip(Tooltip.create(Component.translatable("virtual_mashine.button.ports.tooltip")))
@@ -285,6 +295,7 @@ public class PcControlScreen extends PcScreen {
             bootButton.setValue(config.bootFromCd);
             accelButton.setValue(config.acceleration);
             soundButton.setValue(config.sound);
+            clipboardButton.setValue(config.clipboardSharing);
             networkButton.setValue(config.netMode);
             autoStartButton.setValue(config.autoStart);
             nicButton.setValue(config.nicModel);
@@ -310,7 +321,7 @@ public class PcControlScreen extends PcScreen {
     private void diskAction() {
         flushConfig();
         if (!info.diskExists()) {
-            ClientPcState.send(pcId(), PcActionPayload.DOWNLOAD_OPENWRT);
+            ClientPcState.send(pcId(), "phone".equals(config.type) ? PcActionPayload.DOWNLOAD_ANDROID : PcActionPayload.DOWNLOAD_OPENWRT);
             return;
         }
         minecraft.setScreen(new ConfirmScreen(confirmed -> {
@@ -347,10 +358,10 @@ public class PcControlScreen extends PcScreen {
         diskSlider.active = off && !info.diskExists();
         imageButton.active = off && !info.diskExists() && !frozen;
         diskActionButton.active = off && !frozen && info.qemuFound() && isHost();
-        diskActionButton.setMessage(Component.translatable(info.diskExists()
-                ? "virtual_mashine.button.reset_disk" : "virtual_mashine.button.download_openwrt"));
+        String download = "phone".equals(config.type) ? "virtual_mashine.button.download_android" : "virtual_mashine.button.download_openwrt";
+        diskActionButton.setMessage(Component.translatable(info.diskExists() ? "virtual_mashine.button.reset_disk" : download));
         diskActionButton.setTooltip(Tooltip.create(Component.translatable(info.diskExists()
-                ? "virtual_mashine.button.reset_disk.tooltip" : "virtual_mashine.button.download_openwrt.tooltip")));
+                ? "virtual_mashine.button.reset_disk.tooltip" : download + ".tooltip")));
         if (info.diskExists()) {
             diskSlider.setTooltip(Tooltip.create(Component.translatable("virtual_mashine.option.disk.created")));
         }

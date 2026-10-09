@@ -1,0 +1,19 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "pattern": [
+    "IGI",
+    "GRG",
+    "ICI"
+  ],
+  "key": {
+    "I": "minecraft:iron_ingot",
+    "G": "minecraft:glass_pane",
+    "R": "minecraft:redstone_lamp",
+    "C": "minecraft:comparator"
+  },
+  "result": {
+    "id": "virtual_mashine:display",
+    "count": 1
+  }
+}

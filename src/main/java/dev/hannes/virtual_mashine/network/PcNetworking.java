@@ -25,6 +25,38 @@ public final class PcNetworking {
         PayloadTypeRegistry.clientboundPlay().register(NetPayloads.ApView.TYPE, NetPayloads.ApView.CODEC);
         PayloadTypeRegistry.serverboundPlay().register(NetPayloads.WlanAction.TYPE, NetPayloads.WlanAction.CODEC);
         PayloadTypeRegistry.serverboundPlay().register(NetPayloads.ApAction.TYPE, NetPayloads.ApAction.CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(NetPayloads.IoView.TYPE, NetPayloads.IoView.CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(NetPayloads.IoAction.TYPE, NetPayloads.IoAction.CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(MediaPayloads.VmAudio.TYPE, MediaPayloads.VmAudio.CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(MediaPayloads.MicState.TYPE, MediaPayloads.MicState.CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(MediaPayloads.CameraJob.TYPE, MediaPayloads.CameraJob.CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(MediaPayloads.AudioFocus.TYPE, MediaPayloads.AudioFocus.CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(MediaPayloads.MicAudio.TYPE, MediaPayloads.MicAudio.CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(MediaPayloads.CameraFrame.TYPE, MediaPayloads.CameraFrame.CODEC);
+        ServerPlayNetworking.registerGlobalReceiver(MediaPayloads.AudioFocus.TYPE, (payload, context) -> {
+            VmManager manager = VmManager.get();
+            if (manager != null) {
+                manager.network().media().setFocus(context.player(), payload.vm());
+            }
+        });
+        ServerPlayNetworking.registerGlobalReceiver(MediaPayloads.MicAudio.TYPE, (payload, context) -> {
+            VmManager manager = VmManager.get();
+            if (manager != null) {
+                manager.network().media().micAudio(context.player(), payload);
+            }
+        });
+        ServerPlayNetworking.registerGlobalReceiver(MediaPayloads.CameraFrame.TYPE, (payload, context) -> {
+            VmManager manager = VmManager.get();
+            if (manager != null) {
+                manager.network().media().cameraFrame(context.player(), payload);
+            }
+        });
+        ServerPlayNetworking.registerGlobalReceiver(NetPayloads.IoAction.TYPE, (payload, context) -> {
+            VmManager manager = VmManager.get();
+            if (manager != null) {
+                manager.network().handleIoAction(context.player(), payload);
+            }
+        });
         ServerPlayNetworking.registerGlobalReceiver(NetPayloads.WlanAction.TYPE, (payload, context) -> {
             VmManager manager = VmManager.get();
             if (manager != null) {

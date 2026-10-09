@@ -40,6 +40,8 @@ public final class VirtualMachine {
     private static final Set<Integer> RESERVED_VNC_PORTS = ConcurrentHashMap.newKeySet();
 
     private static final String SNAPSHOT_TAG = "minecraft_freeze";
+    /** Kiosk system of display blocks (Debian + Firefox full screen), looked for in the ISO folder. */
+    static final String DISPLAY_IMAGE = "netz-display.qcow2";
     private static final int SAVEVM_TIMEOUT_MS = 30 * 60 * 1000;
 
     private final UUID id;
@@ -61,8 +63,20 @@ public final class VirtualMachine {
     private volatile int cablePorts;
     private volatile @Nullable SerialLine serial;
     private int reservedVncPort = -1;
+    /** This start boots the Android installer straight from the image (worker thread only). */
+    private boolean installerBoot;
     /** Last carrier state pushed to each card: -1 unknown, 0 down, 1 up. */
     private volatile int[] linkState = new int[0];
+    /** While running: the machine's sound, its microphone input and its camera channel (each may be absent). */
+    private volatile @Nullable VncAudioTap soundTap;
+    private volatile @Nullable SpiceMicrophone microphone;
+    private volatile @Nullable MediaLink media;
+    // Worker thread only: ports and ticket of this start.
+    private int spicePort;
+    private int mediaChannelPort;
+    private int eventPort;
+    private @Nullable QmpEvents events;
+    private String spicePassword = "";
 
     VirtualMachine(UUID id, Path dir, VmManager manager, DeviceType typeForNew) {
         this.id = id;
@@ -93,6 +107,21 @@ public final class VirtualMachine {
     /** The serial port while the machine runs (console cable, OpenWrt set-up). */
     public @Nullable SerialLine serial() {
         return state == State.RUNNING ? serial : null;
+    }
+
+    /** The machine's sound is being listened to (it has a sound card and runs). */
+    public boolean hasSoundTap() {
+        return state == State.RUNNING && soundTap != null;
+    }
+
+    /** Line-in of the sound card, fed by microphones; null when off or on old hardware. */
+    public @Nullable SpiceMicrophone microphone() {
+        return state == State.RUNNING ? microphone : null;
+    }
+
+    /** The channel cameras send pictures through; null when off or on old hardware. */
+    public @Nullable MediaLink media() {
+        return state == State.RUNNING ? media : null;
     }
 
     /** Number of network cards that hang on cables, while the machine runs. */
@@ -178,6 +207,16 @@ public final class VirtualMachine {
         worker.execute(this::doPowerOff);
     }
 
+    /** A new QEMU process, e.g. so a display picks up its new page and size. */
+    public void restart() {
+        worker.execute(() -> {
+            if (process != null) {
+                doPowerOff();
+            }
+            doStart();
+        });
+    }
+
     public void reset() {
         worker.execute(() -> {
             if (state == State.RUNNING && qmp != null) {
@@ -232,6 +271,11 @@ public final class VirtualMachine {
                 current.nicModel = wanted.nicModel;
             }
             current.autoStart = wanted.autoStart;
+            current.typingLayout = wanted.typingLayout;
+            current.clipboardSharing = wanted.clipboardSharing;
+            current.displayUrl = wanted.displayUrl;
+            current.displayWidth = wanted.displayWidth;
+            current.displayHeight = wanted.displayHeight;
             if (!locked) {
                 current.bootFromCd = wanted.bootFromCd;
             }
@@ -313,10 +357,33 @@ public final class VirtualMachine {
             int display = findFreeVncPort();
             reservedVncPort = display;
             int qmpPort = findFreePort();
+            eventPort = findFreePort();
             int serialPort = findFreePort();
             NetworkFabric.UdpBinding[] wires = new NetworkFabric.UdpBinding[0];
             if (VmConfig.NET_CABLE.equals(config.netMode)) {
                 wires = manager.network().openVmPorts(id, deviceType().ports);
+            } else if (VmConfig.NET_DIRECT.equals(config.netMode)) {
+                wires = new NetworkFabric.UdpBinding[]{manager.network().openDirectUplink(id, dir)};
+            }
+            installerBoot = !resume && AndroidSetup.PROVISION.equals(config.provision) && !config.provisioned;
+            if (installerBoot) {
+                Path image = manager.resolveIso(config.iso);
+                if (image == null) {
+                    throw new IOException("Android image missing: " + config.iso);
+                }
+                AndroidSetup.prepareBoot(image, dir);
+            }
+            // A frozen machine resumes on the hardware it was frozen with; a fresh start follows the setting.
+            config.clipboardPort = resume ? config.clipboardPort : config.clipboardSharing;
+            if (!resume) {
+                config.audioInput = config.sound;
+                config.mediaPort = deviceType().usbPorts() > 0 && !deviceType().isUsbDevice();
+            }
+            spicePort = config.sound && config.audioInput ? findFreePort() : 0;
+            mediaChannelPort = config.mediaPort ? findFreePort() : 0;
+            if (spicePort > 0) {
+                spicePassword = randomTicket();
+                Files.writeString(spiceKeyPath(), spicePassword, StandardCharsets.US_ASCII);
             }
             List<String> command = buildCommand(qemu, display, qmpPort, serialPort, resume, wires);
             Virtual_mashine.LOGGER.info("Starting PC {}: {}", id, String.join(" ", command));
@@ -330,7 +397,9 @@ public final class VirtualMachine {
             LIVE_PROCESSES.add(started);
             Files.writeString(dir.resolve("qemu.pid"), Long.toString(started.pid()));
 
+            events = new QmpEvents(eventPort, id.toString().substring(0, 8));
             qmp = QmpClient.connect(qmpPort, started, 30_000);
+            Files.deleteIfExists(spiceKeyPath()); // QEMU has read the ticket.
             freezeSupported = detectFreezeSupport(qmp);
             if (resume) {
                 // -loadvm already restored RAM and disk. Drop the snapshot so a crash later cannot roll the disk back.
@@ -339,13 +408,25 @@ public final class VirtualMachine {
                 saveConfig();
             }
             vncPort = display;
+            String label = id.toString().substring(0, 8);
+            if (config.sound) {
+                soundTap = new VncAudioTap(display, label, pcm -> manager.network().media().audio(id, pcm));
+            }
+            if (spicePort > 0) {
+                microphone = new SpiceMicrophone(spicePort, spicePassword, label);
+            }
+            if (mediaChannelPort > 0) {
+                media = new MediaLink(mediaChannelPort, label);
+            }
             SerialLine line = new SerialLine(serialPort, id.toString().substring(0, 8));
             serial = line;
-            if (!config.provision.isEmpty() && !config.provisioned) {
+            if (installerBoot) {
+                AndroidSetup.attach(line, () -> worker.execute(this::finishAndroidSetup));
+            } else if (!config.provision.isEmpty() && !config.provisioned && !AndroidSetup.PROVISION.equals(config.provision)) {
                 OpenWrtProvisioner.attach(line, config.provision, () -> worker.execute(this::markProvisioned));
                 setMessage("virtual_mashine.msg.provisioning", "");
             }
-            if (wires.length > 0) {
+            if (VmConfig.NET_CABLE.equals(config.netMode) && wires.length > 0) {
                 int[] unknown = new int[wires.length];
                 java.util.Arrays.fill(unknown, -1);
                 linkState = unknown;
@@ -353,9 +434,10 @@ public final class VirtualMachine {
             }
             watchForExit(started);
             String startMessage = resume ? "virtual_mashine.msg.resumed" : isoMissing() ? "virtual_mashine.msg.iso_missing"
+                    : installerBoot ? "virtual_mashine.msg.android_installing"
                     : !config.provision.isEmpty() && !config.provisioned ? "virtual_mashine.msg.provisioning" : "";
             setState(State.RUNNING, startMessage, "");
-            if (wires.length > 0) {
+            if (VmConfig.NET_CABLE.equals(config.netMode) && wires.length > 0) {
                 manager.network().vmNetworkChanged(id, true);
             }
         } catch (IOException | RuntimeException e) {
@@ -467,7 +549,15 @@ public final class VirtualMachine {
         }
         State before = state;
         int exitCode = p.exitValue();
+        QmpEvents watched = events;
+        boolean reboot = before == State.RUNNING && exitCode == 0 && watched != null && watched.rebootRequested();
         cleanUpAfterExit(p);
+        if (reboot) {
+            // The guest restarted (or the reset button): a fresh QEMU instead of a warm reset.
+            setState(State.OFF, "", "");
+            doStart();
+            return;
+        }
         if (exitCode != 0 && before == State.RUNNING) {
             setState(State.OFF, "virtual_mashine.msg.crashed", readLogTail());
         } else {
@@ -480,6 +570,30 @@ public final class VirtualMachine {
             qmp.close();
             qmp = null;
         }
+        if (events != null) {
+            events.close();
+            events = null;
+        }
+        VncAudioTap tap = soundTap;
+        soundTap = null;
+        if (tap != null) {
+            tap.close();
+        }
+        SpiceMicrophone mic = microphone;
+        microphone = null;
+        if (mic != null) {
+            mic.close();
+        }
+        MediaLink link = media;
+        media = null;
+        if (link != null) {
+            link.close();
+        }
+        try {
+            Files.deleteIfExists(spiceKeyPath());
+        } catch (IOException ignored) {
+            // Only readable by this user anyway.
+        }
         SerialLine line = serial;
         if (line != null) {
             line.close();
@@ -488,6 +602,10 @@ public final class VirtualMachine {
         if (cablePorts > 0 || VmConfig.NET_CABLE.equals(config.netMode)) {
             cablePorts = 0;
             linkState = new int[0];
+            manager.network().vmNetworkChanged(id, false);
+        }
+        if (VmConfig.NET_DIRECT.equals(config.netMode)) {
+            manager.network().closeDirectUplink(id);
             manager.network().vmNetworkChanged(id, false);
         }
         if (p != null) {
@@ -547,18 +665,34 @@ public final class VirtualMachine {
         }
         // Fallback when no hypervisor is available (QEMU uses the first accelerator that works).
         cmd.addAll(List.of("-accel", "tcg,thread=multi"));
-        cmd.addAll(List.of("-cpu", "max"));
+        // WHPX cannot save and restore the extended (AVX) register state ("failed to get xsave state"), so
+        // programs using AVX crash at random (Android's init does so every boot). "max" minus XSAVE is not
+        // enough: it still reports AVX-512, which new kernels then use and crash on. A CPU model without AVX
+        // (x86-64-v2 level, plus a few features that do not need XSAVE) is consistent for every guest.
+        boolean whpx = c.acceleration && HostInfo.OS == HostInfo.Os.WINDOWS;
+        cmd.addAll(List.of("-cpu", whpx ? "Westmere,+rdrand,+smep,+smap,+fsgsbase" : "max"));
         cmd.addAll(List.of("-smp", Integer.toString(c.cpus)));
         cmd.addAll(List.of("-m", c.ramMb + "M"));
 
         cmd.addAll(List.of("-drive", "if=none,id=hd0,format=qcow2,file=" + escape(diskPath().toString())));
-        cmd.addAll(List.of("-device", "ide-hd,drive=hd0,bus=ide.0,bootindex=" + (c.bootFromCd ? 1 : 0)));
+        // With -kernel, QEMU's kernel loader takes boot index 0 itself.
+        int firstBoot = installerBoot ? 1 : 0;
+        cmd.addAll(List.of("-device", "ide-hd,drive=hd0,bus=ide.0,bootindex=" + (firstBoot + (c.bootFromCd ? 1 : 0))));
         Path iso = manager.resolveIso(c.iso);
         String cdrom = "if=none,id=cd0,media=cdrom,readonly=on" + (iso != null ? ",format=raw,file=" + escape(iso.toString()) : "");
         cmd.addAll(List.of("-drive", cdrom));
-        cmd.addAll(List.of("-device", "ide-cd,drive=cd0,bus=ide.1,id=cdrom0,bootindex=" + (c.bootFromCd ? 0 : 1)));
+        cmd.addAll(List.of("-device", "ide-cd,drive=cd0,bus=ide.1,id=cdrom0,bootindex=" + (firstBoot + (c.bootFromCd ? 0 : 1))));
 
         cmd.addAll(List.of("-vga", "std"));
+        if (deviceType() == DeviceType.DISPLAY) {
+            // The guest's preferred screen mode (EDID) matches the display's shape, and the page comes
+            // through fw_cfg, which the kiosk system reads at start.
+            int perBlock = c.displayPixelsPerBlock();
+            cmd.addAll(List.of("-global", "VGA.xres=" + perBlock * c.displayWidth, "-global", "VGA.yres=" + perBlock * c.displayHeight));
+            if (!c.displayUrl.isEmpty()) {
+                cmd.addAll(List.of("-fw_cfg", "name=opt/netz/url,string=" + escape(c.displayUrl)));
+            }
+        }
         // Absolute pointer device, so the guest cursor follows the Minecraft mouse exactly.
         cmd.addAll(List.of("-device", "qemu-xhci,id=xhci", "-device", "usb-tablet,bus=xhci.0"));
         switch (c.netMode) {
@@ -571,32 +705,109 @@ public final class VirtualMachine {
                     cmd.addAll(List.of("-device", c.nicModel + ",netdev=net" + port + ",id=nic" + port + ",mac=" + macAddress(port)));
                 }
             }
-            // User-mode NAT: the guest gets an address via DHCP and is online without any cabling.
-            case VmConfig.NET_DIRECT -> cmd.addAll(List.of("-nic", "user,model=" + c.nicModel));
+            // Online without cabling: one card wired invisibly to a private, filtered uplink (see NetworkManager).
+            case VmConfig.NET_DIRECT -> {
+                if (wires.length > 0) {
+                    cmd.addAll(List.of("-netdev", "dgram,id=net0,local.type=inet,local.host=127.0.0.1,local.port=" + wires[0].qemuPort()
+                            + ",remote.type=inet,remote.host=127.0.0.1,remote.port=" + wires[0].modPort()));
+                    cmd.addAll(List.of("-device", c.nicModel + ",netdev=net0,id=nic0,mac=" + macAddress(0)));
+                } else {
+                    cmd.addAll(List.of("-nic", "none"));
+                }
+            }
             default -> cmd.addAll(List.of("-nic", "none"));
         }
         if (c.sound) {
-            String backend = switch (HostInfo.OS) {
-                case WINDOWS -> "dsound";
-                case MAC -> "coreaudio";
-                case LINUX -> "pa";
-            };
-            cmd.addAll(List.of("-audiodev", backend + ",id=snd0", "-device", "ich9-intel-hda", "-device", "hda-output,audiodev=snd0"));
+            // The sound is not played on this computer: the VNC server hands it to the game, which plays it
+            // where the device stands. With line-in, QEMU's SPICE server feeds the microphones in; without a
+            // SPICE client, its output side simply drops the sound, which VNC has picked up already.
+            if (c.audioInput && spicePort > 0) {
+                cmd.addAll(List.of("-audiodev", "spice,id=snd0", "-device", "ich9-intel-hda",
+                        "-device", "hda-duplex,audiodev=snd0,mixer=off"));
+                cmd.addAll(List.of("-object", "secret,id=spice-key,format=raw,file=" + escape(spiceKeyPath().toString()),
+                        "-spice", "port=" + spicePort + ",addr=127.0.0.1,password-secret=spice-key,"
+                                + "disable-copy-paste=on,disable-agent-file-xfer=on"));
+            } else {
+                cmd.addAll(List.of("-audiodev", "none,id=snd0", "-device", "ich9-intel-hda", "-device", "hda-output,audiodev=snd0"));
+            }
+        }
+        if (c.clipboardPort) {
+            // Shared clipboard with the viewer. Needs spice-vdagent in the guest, which most Linux desktops ship.
+            // Added after all other PCI devices so existing guests keep their device addresses.
+            cmd.addAll(List.of("-chardev", "qemu-vdagent,id=vdagent,name=vdagent,clipboard=on,mouse=off",
+                    "-device", "virtio-serial-pci,id=vdagent-serial",
+                    "-device", "virtserialport,bus=vdagent-serial.0,chardev=vdagent,name=com.redhat.spice.0"));
+        }
+        if (mediaChannelPort > 0) {
+            // Pictures of USB cameras, read by the netz-media agent in the guest.
+            cmd.addAll(List.of("-chardev", "socket,id=netz-media,host=127.0.0.1,port=" + mediaChannelPort + ",server=on,wait=off",
+                    "-device", "virtio-serial-pci,id=netz-media-bus",
+                    "-device", "virtserialport,bus=netz-media-bus.0,chardev=netz-media,name=org.netz.media"));
         }
         // lock-key-sync off: the viewer sends raw scancodes (Caps Lock included). With it on, QEMU guesses
         // Caps Lock from the keysym's case and turns Shift+S into a lower-case s.
-        cmd.addAll(List.of("-display", "none", "-vnc", "127.0.0.1:" + (vncPort - 5900) + ",lock-key-sync=off"));
+        cmd.addAll(List.of("-display", "none", "-vnc", "127.0.0.1:" + (vncPort - 5900) + ",lock-key-sync=off"
+                + (c.sound ? ",audiodev=snd0" : "")));
         cmd.addAll(List.of("-qmp", "tcp:127.0.0.1:" + qmpPort + ",server=on,wait=off"));
+        // Under WHPX a warm reset can hang the guest in its boot loader: a reboot ends QEMU instead,
+        // and QmpEvents (on the second monitor) has the machine started again from cold.
+        cmd.addAll(List.of("-qmp", "tcp:127.0.0.1:" + eventPort + ",server=on,wait=off", "-action", "reboot=shutdown"));
         // COM1 / ttyS0: reachable through the console cable and used for the OpenWrt set-up.
         cmd.addAll(List.of("-monitor", "none", "-serial", "tcp:127.0.0.1:" + serialPort + ",server=on,wait=off", "-parallel", "none"));
         if (resume) {
             cmd.addAll(List.of("-loadvm", SNAPSHOT_TAG));
+        }
+        if (installerBoot) {
+            cmd.addAll(List.of("-kernel", dir.resolve(AndroidSetup.KERNEL).toString(),
+                    "-initrd", dir.resolve(AndroidSetup.INITRD).toString(), "-append", AndroidSetup.INSTALL_CMDLINE));
         }
         return cmd;
     }
 
     private String macAddress(int port) {
         return dev.hannes.virtual_mashine.net.DeviceMac.of(id, port);
+    }
+
+    /** The installer synced the disk before it said so: from now on the phone boots Android from its own disk. */
+    private void finishAndroidSetup() {
+        doPowerOff();
+        config.provisioned = true;
+        config.iso = "";
+        saveConfig();
+        AndroidSetup.cleanUpBoot(dir);
+        doStart();
+        if (state == State.RUNNING) {
+            setMessage("virtual_mashine.msg.android_installed", "");
+            manager.onVmChanged(this);
+        }
+    }
+
+    public void downloadAndroid() {
+        worker.execute(() -> {
+            if (state != State.OFF || diskExists()) {
+                setMessage("virtual_mashine.msg.android_needs_empty_disk", "");
+                manager.onVmChanged(this);
+                return;
+            }
+            try {
+                String file = AndroidSetup.fetch(manager.globalIsoDir(), (done, total) -> {
+                    setMessage("virtual_mashine.msg.downloading", (done / 1024 / 1024) + " / "
+                            + (total > 0 ? Long.toString(total / 1024 / 1024) : "?") + " MB");
+                    manager.onVmChanged(this);
+                });
+                config.iso = file;
+                config.diskImage = "";
+                config.bootFromCd = false;
+                config.provision = AndroidSetup.PROVISION;
+                config.provisioned = false;
+                saveConfig();
+                setMessage("virtual_mashine.msg.android_ready", "");
+            } catch (IOException e) {
+                Virtual_mashine.LOGGER.warn("Android download failed", e);
+                setMessage("virtual_mashine.msg.download_failed", e.getMessage());
+            }
+            manager.onVmChanged(this);
+        });
     }
 
     private void markProvisioned() {
@@ -826,6 +1037,21 @@ public final class VirtualMachine {
         return dir.resolve("qemu.log");
     }
 
+    /** The SPICE ticket of this start, read by QEMU and deleted once it runs. */
+    private Path spiceKeyPath() {
+        return dir.resolve("spice.key");
+    }
+
+    private static String randomTicket() {
+        String chars = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+        java.security.SecureRandom random = new java.security.SecureRandom();
+        StringBuilder ticket = new StringBuilder();
+        for (int i = 0; i < 24; i++) {
+            ticket.append(chars.charAt(random.nextInt(chars.length())));
+        }
+        return ticket.toString();
+    }
+
     private VmConfig loadConfig(DeviceType typeForNew) {
         Path file = dir.resolve("config.json");
         try {
@@ -842,9 +1068,16 @@ public final class VirtualMachine {
         fresh.cpus = Math.min(typeForNew.defaultCpus, HostInfo.cpuCount());
         fresh.netMode = VmConfig.NET_CABLE;
         fresh.autoStart = typeForNew.alwaysOnByDefault;
-        fresh.sound = typeForNew == DeviceType.PC || typeForNew == DeviceType.LAPTOP;
-        if (typeForNew != DeviceType.PC && typeForNew != DeviceType.LAPTOP) {
+        fresh.sound = typeForNew == DeviceType.PC || typeForNew == DeviceType.LAPTOP || typeForNew == DeviceType.PHONE
+                || typeForNew == DeviceType.DISPLAY;
+        if (typeForNew == DeviceType.PHONE) {
+            fresh.diskGb = 16;
+            fresh.typingLayout = "us"; // Android's on-screen and hardware keyboard default.
+        } else if (typeForNew != DeviceType.PC && typeForNew != DeviceType.LAPTOP) {
             fresh.diskGb = 8;
+        }
+        if (typeForNew == DeviceType.DISPLAY && manager.resolveIso(DISPLAY_IMAGE) != null) {
+            fresh.diskImage = DISPLAY_IMAGE; // The ready-made kiosk system, when it is in the ISO folder.
         }
         return fresh;
     }
@@ -855,6 +1088,8 @@ public final class VirtualMachine {
             case ROUTER -> "Router";
             case MANAGED_SWITCH -> "Switch";
             case LAPTOP -> "Laptop";
+            case PHONE -> "Handy";
+            case DISPLAY -> "Display";
             default -> "PC";
         };
     }

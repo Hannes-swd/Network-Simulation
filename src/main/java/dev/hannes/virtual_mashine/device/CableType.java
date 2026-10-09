@@ -11,9 +11,11 @@ public enum CableType {
     /** Single-mode fibre (yellow jacket). */
     FIBER("fiber", Kind.FIBER, 10_000, 0xF2C230),
     /** Rollover console cable from a computer's serial port to a router or switch console. */
-    CONSOLE("console", Kind.CONSOLE, 10, 0x7FC8E8);
+    CONSOLE("console", Kind.CONSOLE, 10, 0x7FC8E8),
+    /** USB 2.0 with an active extension: connects a microphone or camera to a computer. */
+    USB("usb", Kind.USB, 10, 0x3A3A3E);
 
-    public enum Kind { COPPER, FIBER, CONSOLE }
+    public enum Kind { COPPER, FIBER, CONSOLE, USB }
 
     public final String id;
     public final Kind kind;
@@ -31,6 +33,15 @@ public enum CableType {
         return kind == Kind.CONSOLE;
     }
 
+    public boolean isUsb() {
+        return kind == Kind.USB;
+    }
+
+    /** Console and USB cables do not carry network frames. */
+    public boolean isNetwork() {
+        return kind == Kind.COPPER || kind == Kind.FIBER;
+    }
+
     /** Line rate in Mbit/s over a cable of this length; 0 for console cables. */
     public int speedMbit(double length) {
         return switch (this) {
@@ -38,6 +49,7 @@ public enum CableType {
             case CAT6 -> length <= 55 ? 10_000 : 1_000;
             case CAT6A, CAT7, FIBER -> 10_000;
             case CONSOLE -> 0;
+            case USB -> 480;
         };
     }
 
@@ -92,6 +104,9 @@ public enum CableType {
         }
         if (color == CONSOLE.defaultColor) {
             return "virtual_mashine.color.light_blue";
+        }
+        if (color == USB.defaultColor) {
+            return "virtual_mashine.color.black";
         }
         return "virtual_mashine.color.custom";
     }

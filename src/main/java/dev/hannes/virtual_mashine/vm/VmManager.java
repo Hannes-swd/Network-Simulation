@@ -40,6 +40,12 @@ public final class VmManager {
     /** Which PCs each player opened through a block; only those may be streamed to them. */
     private final Map<UUID, Set<UUID>> openedBy = new ConcurrentHashMap<>();
     private final VncTunnelServer tunnels = new VncTunnelServer();
+    /**
+     * Work the machines' threads hand to the server thread. Not {@code server.execute}: once the server
+     * is stopping, that runs the task right on the calling thread, and several machines doing so at
+     * once corrupt the server's task counter, which then waits forever while saving the world.
+     */
+    private final java.util.Queue<Runnable> serverTasks = new java.util.concurrent.ConcurrentLinkedQueue<>();
     private final NetworkManager network;
 
     private VmManager(MinecraftServer server) {
@@ -64,6 +70,12 @@ public final class VmManager {
         return network;
     }
 
+    /** The player opened this machine's screen or panel through its block (or carries it). */
+    public boolean mayWatch(ServerPlayer player, UUID id) {
+        Set<UUID> allowed = openedBy.get(player.getUUID());
+        return allowed != null && allowed.contains(id);
+    }
+
     Path globalIsoDir() {
         return globalIsoDir;
     }
@@ -83,6 +95,9 @@ public final class VmManager {
     public static void onServerTick(MinecraftServer server) {
         VmManager manager = instance;
         if (manager != null) {
+            for (Runnable task; (task = manager.serverTasks.poll()) != null; ) {
+                task.run();
+            }
             manager.network.tick();
         }
     }
@@ -140,6 +155,16 @@ public final class VmManager {
         return machine(id, type).config().name;
     }
 
+    /** What a display block shows: {width, height, VNC port (0 = off)}. */
+    public int[] displayState(UUID id) {
+        VirtualMachine vm = machines.get(id);
+        if (vm == null) {
+            return new int[]{2, 1, 0};
+        }
+        VmConfig c = vm.config();
+        return new int[]{c.displayWidth, c.displayHeight, vm.state() == VirtualMachine.State.RUNNING ? vm.vncPort() : 0};
+    }
+
     public List<VirtualMachine> runningMachines() {
         List<VirtualMachine> running = new ArrayList<>();
         for (VirtualMachine vm : machines.values()) {
@@ -155,7 +180,9 @@ public final class VmManager {
     public void openTunnel(ServerPlayer player, TunnelPayloads.Open payload) {
         Set<UUID> allowed = openedBy.get(player.getUUID());
         VirtualMachine vm = machines.get(payload.pcId());
-        boolean permitted = allowed != null && allowed.contains(payload.pcId()) && vm != null;
+        // Displays are watched by everyone standing near them, without opening them first.
+        boolean permitted = vm != null && (allowed != null && allowed.contains(payload.pcId())
+                || vm.deviceType() == DeviceType.DISPLAY && network.isNear(payload.pcId(), player, 96));
         tunnels.open(player, payload.tunnelId(), permitted ? vm.vncPort() : -1);
     }
 
@@ -197,9 +224,11 @@ public final class VmManager {
             case PcActionPayload.SHUTDOWN -> vm.acpiShutdown();
             case PcActionPayload.POWER_OFF -> vm.powerOff();
             case PcActionPayload.RESET -> vm.reset();
+            case PcActionPayload.RESTART -> vm.restart();
             case PcActionPayload.FREEZE -> vm.freeze();
             case PcActionPayload.DISCARD_STATE -> vm.discardFrozenState();
             case PcActionPayload.DOWNLOAD_OPENWRT -> vm.downloadOpenWrt();
+            case PcActionPayload.DOWNLOAD_ANDROID -> vm.downloadAndroid();
             case PcActionPayload.RESET_DISK -> vm.resetDisk();
             case PcActionPayload.CONFIG -> {
                 try {
@@ -215,8 +244,13 @@ public final class VmManager {
 
     // ---------------------------------------------------------------- called from machines
 
+    /** Runs {@code task} on the server thread with the next tick; dropped if the world closes first. */
+    public void runOnServer(Runnable task) {
+        serverTasks.add(task);
+    }
+
     void onVmChanged(VirtualMachine vm) {
-        server.execute(() -> {
+        runOnServer(() -> {
             PcInfoPayload payload = info(vm, false);
             for (ServerPlayer player : server.getPlayerList().getPlayers()) {
                 ServerPlayNetworking.send(player, payload);

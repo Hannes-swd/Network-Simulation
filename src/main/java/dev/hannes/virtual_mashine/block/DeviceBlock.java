@@ -5,6 +5,7 @@ import dev.hannes.virtual_mashine.ModRegistry;
 import dev.hannes.virtual_mashine.device.DeviceType;
 import dev.hannes.virtual_mashine.item.CableItem;
 import dev.hannes.virtual_mashine.item.NetworkTesterItem;
+import dev.hannes.virtual_mashine.net.IoModule;
 import dev.hannes.virtual_mashine.vm.VmManager;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -33,6 +34,8 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import org.jspecify.annotations.Nullable;
+
+import java.util.UUID;
 
 /**
  * Every network device block. Right-click: the machine's screen (computers) or its port panel;
@@ -97,10 +100,21 @@ public class DeviceBlock extends BaseEntityBlock {
             if (manager == null) {
                 return InteractionResult.SUCCESS;
             }
-            if (type.isVm() && !player.isShiftKeyDown()) {
+            if (type == DeviceType.DISPLAY) {
+                // Clicks on a running display go to its page (handled by the client); this is its settings.
+                manager.openFor(serverPlayer, device.getOrCreatePcId(), type);
+            } else if (type.isVm() && !player.isShiftKeyDown()) {
                 manager.openFor(serverPlayer, device.getOrCreatePcId(), type);
             } else if (type == DeviceType.ACCESS_POINT && !player.isShiftKeyDown()) {
                 manager.network().openApView(serverPlayer, device.getOrCreatePcId(), pos, state.getValue(FACING), "");
+            } else if (type == DeviceType.IO_MODULE && !player.isShiftKeyDown()) {
+                manager.network().openIoView(serverPlayer, device.getOrCreatePcId(), pos, state.getValue(FACING), "");
+            } else if (type.isUsbDevice() && !player.isShiftKeyDown()) {
+                // The switch on a microphone or camera; sneaking opens its USB socket instead.
+                device.setUsbEnabled(!device.usbEnabled());
+                UUID id = device.getOrCreatePcId();
+                manager.network().setUsbEnabled(id, device.usbEnabled());
+                serverPlayer.sendOverlayMessage(manager.network().media().usbStatus(id, type));
             } else {
                 openPorts(serverPlayer, level, pos, state, false);
             }
@@ -113,6 +127,52 @@ public class DeviceBlock extends BaseEntityBlock {
         if (manager != null && level.getBlockEntity(pos) instanceof DeviceBlockEntity device) {
             manager.network().openPortView(player, device.getOrCreatePcId(), type, pos, state.getValue(FACING), tester);
         }
+    }
+
+    // ---------------------------------------------------------------- I/O module redstone
+
+    /** World direction of an I/O channel: front, back, left, right (as seen standing in front), top, bottom. */
+    public static Direction ioSide(Direction facing, int channel) {
+        return switch (channel) {
+            case 0 -> facing;
+            case 1 -> facing.getOpposite();
+            case 2 -> facing.getClockWise();
+            case 3 -> facing.getCounterClockWise();
+            case 4 -> Direction.UP;
+            default -> Direction.DOWN;
+        };
+    }
+
+    private static int ioChannel(Direction facing, Direction side) {
+        for (int ch = 0; ch < IoModule.CHANNELS; ch++) {
+            if (ioSide(facing, ch) == side) {
+                return ch;
+            }
+        }
+        return 0;
+    }
+
+    @Override
+    protected boolean isSignalSource(BlockState state) {
+        return type == DeviceType.IO_MODULE;
+    }
+
+    /** Only the faces set as outputs give a signal, and each only its own level. */
+    @Override
+    protected int getSignal(BlockState state, BlockGetter level, BlockPos pos, Direction direction) {
+        if (type != DeviceType.IO_MODULE || !(level.getBlockEntity(pos) instanceof DeviceBlockEntity device)) {
+            return 0;
+        }
+        // "direction" points from the block asking towards this one, so the face it touches is the opposite.
+        int ch = ioChannel(state.getValue(FACING), direction.getOpposite());
+        int packed = device.ioOutputs();
+        return IoModule.packedIsOutput(packed, ch) ? IoModule.packedLevel(packed, ch) : 0;
+    }
+
+    /** Strong power like a lever: a solid block in front of an output carries the signal on. */
+    @Override
+    protected int getDirectSignal(BlockState state, BlockGetter level, BlockPos pos, Direction direction) {
+        return getSignal(state, level, pos, direction);
     }
 
     @Override
