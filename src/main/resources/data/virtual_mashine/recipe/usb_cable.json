@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "pattern": [
+    "ICI",
+    " R "
+  ],
+  "key": {
+    "I": "minecraft:iron_nugget",
+    "C": "minecraft:copper_ingot",
+    "R": "minecraft:black_dye"
+  },
+  "result": {
+    "id": "virtual_mashine:usb_cable",
+    "count": 2
+  }
+}

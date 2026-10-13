@@ -1,0 +1,18 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "pattern": [
+    " B ",
+    " I ",
+    "IRI"
+  ],
+  "key": {
+    "B": "minecraft:iron_bars",
+    "I": "minecraft:iron_ingot",
+    "R": "minecraft:redstone"
+  },
+  "result": {
+    "id": "virtual_mashine:microphone",
+    "count": 1
+  }
+}
