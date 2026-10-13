@@ -1,15 +1,44 @@
 # Virtual Mashine
 
-Fabric-Mod für Minecraft 26.1: ein platzierbarer **PC**-Block, in dem eine echte virtuelle Maschine läuft
-(QEMU). ISO einlegen, RAM/CPU einstellen, Betriebssystem installieren und direkt in Minecraft benutzen.
+**Virtual Mashine** ist eine Fabric-Mod für Minecraft 26.1, die echte virtuelle Computer und Netzwerke
+in die Spielwelt bringt. PCs, Server, Router, Switches, WLAN, Displays und Netzwerk-I/O lassen sich
+verbinden und bedienen. Die Computer laufen mit **QEMU** und starten echte Betriebssysteme statt einer
+Minecraft-Simulation davon.
+
+## Betriebssysteme und Plattformen
+
+Host und Gast sind zwei verschiedene Dinge: Das **Hostsystem** ist der Computer, auf dem Minecraft und
+QEMU laufen. Das **Gastsystem** ist das Betriebssystem innerhalb einer virtuellen Maschine.
+
+| System | Verwendung |
+|---|---|
+| Windows, Linux oder macOS | Hostsysteme: Die Mod sucht QEMU an den üblichen Installationsorten und im `PATH`. QEMU muss `qemu-system-x86_64` enthalten. |
+| x86-64-Betriebssysteme, die unter QEMU laufen | Eigene VM-Gäste: ISO-Datei einlegen oder ein unterstütztes Festplatten-Image verwenden. Ob ein System funktioniert, hängt auch von dessen QEMU- und Hardware-Anforderungen ab. |
+| Android-x86 9.0-r2 | Vorgefertigtes Handysystem. Die Mod kann das ISO herunterladen, die Prüfsumme prüfen und Android auf der virtuellen Festplatte installieren. |
+| OpenWrt x86-64 | Vorgefertigtes Router-/Switch-System. Die Mod lädt das aktuelle stabile Image samt SHA-256-Prüfung und kann es für Router oder Managed Switches einrichten. |
+| Debian mit Firefox | Vorgesehenes Kiosk-System für Netzwerk-Displays. Das Festplatten-Image `netz-display.qcow2` muss im ISO-Ordner vorhanden sein; es wird nicht mit der Mod ausgeliefert. |
+| Debian oder Ubuntu | Für den optionalen Linux-Treiber der virtuellen Kamera gibt es ein Installationsskript unter [`guest/netz-media`](guest/netz-media). |
+
+Die Mod schränkt eigene Gäste nicht auf diese Beispiele ein: Sie können grundsätzlich andere x86-64-Systeme
+verwenden, sofern sie mit der von QEMU bereitgestellten virtuellen Hardware zurechtkommen. Die genannten
+vorgefertigten Systeme und Funktionen sind keine Zusage, dass jede Version oder jedes beliebige ISO getestet
+wurde.
 
 ## Voraussetzungen
 
-- Fabric Loader 0.19.5+ und Fabric API für Minecraft 26.1
-- **QEMU** (Open Source), z. B. unter Windows:
-  `winget install SoftwareFreedomConservancy.QEMU`
-  Die Mod findet QEMU automatisch (`C:\Program Files\qemu`, PATH, …). Liegt es woanders, trägt man den Ordner in
-  `config/virtual_mashine.json` bei `qemuPath` ein.
+- Minecraft **26.1** mit **Fabric Loader 0.19.5 oder neuer** und Fabric API
+  (Projektversion **0.155.3+26.1.2**)
+- **Java 25** für Minecraft bzw. zum Bauen des Projekts
+- **QEMU** inklusive `qemu-system-x86_64` und `qemu-img` auf dem Hostsystem
+- Genügend Arbeitsspeicher und CPU-Leistung für Minecraft und die gestarteten VMs. RAM und CPU-Kerne der
+  Gäste werden in den VM-Einstellungen vergeben.
+
+Unter Windows kann QEMU z. B. mit `winget install SoftwareFreedomConservancy.QEMU` installiert werden.
+Die Mod sucht QEMU automatisch (unter Windows z. B. in `C:\Program Files\qemu`, außerdem im `PATH`).
+Liegt QEMU an einem anderen Ort, kann der Pfad in `config/virtual_mashine.json` unter `qemuPath`
+eingetragen werden. Hardwarebeschleunigung nutzt die auf dem Host verfügbare QEMU-Technik (z. B. WHPX
+unter Windows, KVM unter Linux oder HVF unter macOS); ohne Beschleunigung kann QEMU in langsamer Emulation
+laufen.
 
 ## Benutzung
 
@@ -43,11 +72,17 @@ wie bei einem echten PC. Internet gibt es über ein Kabel zum Internet-Anschluss
 
 Alles liegt im Weltordner unter `virtual_mashine/<PC-ID>/` (Festplatte `disk.qcow2`, `config.json`, `qemu.log`).
 Jeder PC hat seine eigene Maschine; abgebaute PCs behalten ihre Festplatte, wenn man sie wieder platziert.
+ISOs und weitere Festplatten-Images können im Weltordner unter `virtual_mashine/isos/` oder im gemeinsamen
+Ordner `vm_isos/` neben dem Minecraft-Spiel liegen. Unterstützte Image-Endungen sind `.qcow2`, `.img`,
+`.img.gz`, `.raw`, `.vmdk`, `.vdi`, `.vhd` und `.vhdx`; Installationsmedien werden als `.iso` eingebunden.
 
-- **Beschleunigung an** (Standard, schnell, WHPX): Beim Verlassen der Welt fährt der PC sauber herunter
-  (nach `shutdownTimeoutSeconds` Sekunden wird hart ausgeschaltet). WHPX kann keinen RAM-Zustand speichern.
-- **Beschleunigung aus** (Emulation, langsamer): **Einfrieren** ist möglich – beim Verlassen der Welt oder per
-  Knopf wird der komplette Zustand inkl. RAM gespeichert und mit **Fortsetzen** genau dort weitergemacht.
+- **Beschleunigung an** (Standard, schnell): QEMU nutzt, sofern verfügbar, die Hardwarebeschleunigung des
+  Hostsystems. Beim Verlassen der Welt fährt der PC sauber herunter (nach `shutdownTimeoutSeconds` Sekunden
+  wird er nötigenfalls hart ausgeschaltet).
+- **Beschleunigung aus** (Emulation, langsamer): **Einfrieren** ist möglich – beim Verlassen der Welt oder
+  per Knopf wird der komplette Zustand inklusive RAM gespeichert und mit **Fortsetzen** genau dort weitergemacht.
+  Auch Linux mit KVM kann eingefroren werden. WHPX unter Windows kann keinen RAM-Zustand speichern; bei
+  aktivierter Beschleunigung ist Einfrieren dort nicht verfügbar.
 
 ## Netzwerke bauen
 
@@ -79,7 +114,7 @@ sie beim ersten Start über die Konsole ein:
 - Managed Switch: alle Ports in einer Bridge, holt sich seine Verwaltungs-IP per DHCP.
 
 Danach ist es ein ganz normales OpenWrt: Weboberfläche LuCI (z. B. http://192.168.1.1 vom PC aus),
-SSH oder Konsolenkabel. Eigene Festplatten-Images (.img, .img.gz, .qcow2, .vmdk, .vdi, .vhdx) legst du
+SSH oder Konsolenkabel. Eigene Festplatten-Images (.qcow2, .img, .img.gz, .raw, .vmdk, .vdi, .vhd, .vhdx) legst du
 in den ISO-Ordner und wählst sie unter „Image“.
 
 **WLAN:** Access Point per Kabel an Switch/Router hängen, im Laptop-Menü „WLAN“ das Netz wählen und das
@@ -90,9 +125,9 @@ Netzwerkkarte; verbunden/getrennt und die Geschwindigkeit sind aber echt.
 **Konsole:** Konsolenkabel von COM1 eines PCs an „Console“ eines Routers/Switches. Im PC z. B.
 `screen /dev/ttyS0 115200` (Linux) bzw. PuTTY auf COM1 (Windows).
 
-Neue Geräte stehen auf **„Netzwerk: Kabel“** – Internet gibt es also nur über eine Verbindung zum
-Internet-Anschluss. „Direkt“ ist die Abkürzung ohne Kabel (ein unsichtbarer eigener Anschluss, gleich
-abgesichert).
+Neue Geräte stehen auf **„Netzwerk: Kabel“** – Internet gibt es über eine Verbindung zum
+Internet-Anschluss. **„Direkt“** verwendet QEMUs eingebautes NAT und kommt ohne Kabel aus; **„Aus“**
+deaktiviert die Netzwerkkarte. Für kontrollierte, in der Welt verkabelte Netzwerke wähle „Kabel“.
 
 **Handy:** aus dem Tab „Endgeräte“ nehmen, Rechtsklick → **„Android laden“** (Android-x86 9, Open Source,
 ca. 920 MB, Prüfsumme wird kontrolliert) → **Starten**. Android installiert sich beim ersten Start von selbst
@@ -184,17 +219,21 @@ Knöpfen für Türen (über das I/O-Modul). Größe einstellbar bis 8 x 6 Blöck
 
 ## Sicherheit (z. B. zum Testen von Viren)
 
-- Jede VM läuft in QEMU und sieht nur ihre eigene virtuelle Festplatte – keine Ordner deines PCs.
-- **Internet-Filter:** Was eine VM ins Internet schickt, geht durch einen Filter im Internet-Anschluss. Erlaubt
-  sind nur DHCP, DNS und **öffentliche** Internet-Adressen. Gesperrt sind dein echter PC (auch Dienste, die nur
-  lokal auf `127.0.0.1` laufen, und die Steuerung der anderen VMs) und dein Heimnetz (Router, NAS, andere
-  Geräte: 10.x, 172.16–31.x, 192.168.x usw.).
+- Jede VM läuft als eigener QEMU-Prozess. Es ist keine gemeinsame Host-Ordnerfreigabe eingerichtet; die VM
+  bekommt nur die für sie ausgewählten virtuellen Laufwerke und Installationsmedien.
+- **Internet-Anschluss in der Welt:** Der Modem-Filter lässt DHCP, DNS und **öffentliche** Internet-Adressen
+  passieren. Gesperrt sind dein echter PC (auch Dienste, die nur lokal auf `127.0.0.1` laufen, und die
+  Steuerung der anderen VMs) und private Adressbereiche wie Heimnetz, Router und NAS
+  (`10.x`, `172.16–31.x`, `192.168.x` usw.).
+- **„Direkt“-Netzwerk:** Nutzt QEMUs eingebautes NAT statt des Modem-Blocks und damit nicht dessen
+  In-Game-Filter. Für Tests ohne direkten Internetzugang die Netzwerkkarte auf „Aus“ stellen oder die VM
+  nur an ein isoliertes Kabelnetz ohne Internet-Anschluss anschließen.
 - **Zwischenablage:** pro PC abschaltbar („Kopieren: Aus“). Wenn an, bekommt der PC deinen kopierten Text nur
   in dem Moment, in dem du in seinen Bildschirm klickst.
 - Grenzen: Die VM kann ins Internet (wie ein echter infizierter PC hinter einem Router). Gegen Fehler in QEMU
   selbst („VM-Ausbruch“) hilft nur, QEMU aktuell zu halten (`winget upgrade SoftwareFreedomConservancy.QEMU`).
-  Für Viren-Tests: Kopieren aus, Netzwerk aus oder nur Kabel ohne Internet-Anschluss, Einfrieren statt Festplatte
-  löschen, wenn du zurück willst.
+  Für Viren-Tests: Kopieren aus, Netzwerk aus oder ein isoliertes Kabelnetz verwenden. Einfrieren statt
+  Festplatte löschen, wenn du zu einem gespeicherten Zustand zurückwillst.
 
 ## Zusammen spielen (Essential, LAN, Server)
 
@@ -205,12 +244,19 @@ hinzufügen, eingelegt werden können sie von allen.
 
 ## Selbst bauen
 
-Java 25 wird benötigt.
+Das Projekt verwendet Java 25, Gradle mit Fabric Loom, Minecraft 26.1 und Fabric API. QEMU führt die
+x86-64-Gäste aus; die Mod steuert QEMU über QMP und zeigt den VM-Bildschirm über VNC/RFB an. Das virtuelle
+Netzwerk verbindet die Mod-Geräte per Ethernet; zusätzlich stellt das I/O-Modul HTTP/JSON und Modbus TCP
+bereit. In Mehrspielerwelten werden Bild und Eingaben über die Minecraft-Verbindung zwischen Host und
+Mitspielern übertragen. QEMU und Gastbetriebssysteme sind externe Komponenten und werden nicht mit dem
+Mod-Build ausgeliefert.
 
 ```
 ./gradlew build      # Mod-Datei liegt danach in build/libs/
 ./gradlew runClient  # Minecraft mit der Mod zum Testen starten
 ```
+
+Unter Windows geht es mit `.\gradlew.bat build` bzw. `.\gradlew.bat runClient`.
 
 ## Lizenz
 
