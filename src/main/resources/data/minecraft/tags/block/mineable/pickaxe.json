@@ -12,6 +12,8 @@
     "virtual_mashine:io_module",
     "virtual_mashine:display",
     "virtual_mashine:microphone",
-    "virtual_mashine:camera"
+    "virtual_mashine:camera",
+    "virtual_mashine:hdmi_switch",
+    "virtual_mashine:usb_hub"
   ]
 }

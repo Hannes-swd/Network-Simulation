@@ -1,6 +1,7 @@
 package dev.hannes.virtual_mashine.client.screen;
 
 import dev.hannes.virtual_mashine.client.ClientPcState;
+import dev.hannes.virtual_mashine.device.DeviceType;
 import dev.hannes.virtual_mashine.network.PcActionPayload;
 import dev.hannes.virtual_mashine.network.PcInfoPayload;
 import dev.hannes.virtual_mashine.vm.VmConfig;
@@ -46,6 +47,7 @@ public class PcControlScreen extends PcScreen {
     private CycleButton<Boolean> clipboardButton;
     private CycleButton<String> networkButton;
     private CycleButton<Boolean> autoStartButton;
+    private CycleButton<Boolean> screensButton;
     private CycleButton<String> nicButton;
     private Button startButton;
     private Button displayButton;
@@ -181,11 +183,22 @@ public class PcControlScreen extends PcScreen {
 
         autoStartButton = CycleButton.onOffBuilder(config.autoStart)
                 .withTooltip(v -> Tooltip.create(Component.translatable("virtual_mashine.option.autostart.tooltip")))
-                .create(left, y, half, 20, Component.translatable("virtual_mashine.option.autostart"), (button, v) -> {
+                .create(left, y, soundWidth, 20, Component.translatable("virtual_mashine.option.autostart"), (button, v) -> {
                     config.autoStart = v;
                     markDirty();
                 });
         addRenderableWidget(autoStartButton);
+        // Graphics card: several screens for HDMI monitors, or the plain VGA card of older versions.
+        screensButton = CycleButton.booleanBuilder(Component.translatable("virtual_mashine.option.screens.multi"),
+                        Component.translatable("virtual_mashine.option.screens.single"), config.multiScreen)
+                .withTooltip(v -> Tooltip.create(Component.translatable("virtual_mashine.option.screens.tooltip")))
+                .create(left + soundWidth + 4, y, half - soundWidth - 4, 20, Component.translatable("virtual_mashine.option.screens"),
+                        (button, v) -> {
+                            config.multiScreen = v;
+                            markDirty();
+                        });
+        screensButton.active = DeviceType.byId(config.type).hasVideoOutputs();
+        addRenderableWidget(screensButton);
         nicButton = CycleButton.<String>builder(Component::literal, config.nicModel)
                 .withValues(VmConfig.NIC_MODELS)
                 .withTooltip(v -> Tooltip.create(Component.translatable("virtual_mashine.option.nic.tooltip")))
@@ -298,6 +311,7 @@ public class PcControlScreen extends PcScreen {
             clipboardButton.setValue(config.clipboardSharing);
             networkButton.setValue(config.netMode);
             autoStartButton.setValue(config.autoStart);
+            screensButton.setValue(config.multiScreen);
             nicButton.setValue(config.nicModel);
             imageButton.setValue(config.diskImage);
         } finally {

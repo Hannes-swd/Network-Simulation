@@ -69,6 +69,8 @@ public final class ModRegistry {
             Shapes.or(Block.box(5, 0, 5, 11, 1, 11), Block.box(7, 1, 7, 9, 7, 9), Block.box(6, 7, 6, 10, 12, 10)), MapColor.COLOR_GRAY, 0);
     public static final Block CAMERA_BLOCK = device(DeviceType.CAMERA,
             Shapes.or(Block.box(6, 0, 6, 10, 3, 10), Block.box(4, 3, 4, 12, 9, 12)), MapColor.COLOR_BLACK, 1);
+    public static final Block HDMI_SWITCH_BLOCK = device(DeviceType.HDMI_SWITCH, Block.box(3, 0, 4, 13, 3, 12), MapColor.COLOR_BLACK, 1);
+    public static final Block USB_HUB_BLOCK = device(DeviceType.USB_HUB, Block.box(4, 0, 5, 12, 2, 11), MapColor.COLOR_GRAY, 1);
 
     public static final Item PC_ITEM = DEVICE_ITEMS.get(DeviceType.PC);
 
@@ -95,7 +97,8 @@ public final class ModRegistry {
     /** One creative tab per category, like the vanilla ones. */
     public static void register() {
         tab("devices", DEVICE_ITEMS.get(DeviceType.PC), DEVICE_ITEMS.get(DeviceType.PC), DEVICE_ITEMS.get(DeviceType.LAPTOP),
-                PHONE, DEVICE_ITEMS.get(DeviceType.SERVER), DEVICE_ITEMS.get(DeviceType.MICROPHONE), DEVICE_ITEMS.get(DeviceType.CAMERA));
+                PHONE, DEVICE_ITEMS.get(DeviceType.SERVER), DEVICE_ITEMS.get(DeviceType.DISPLAY), DEVICE_ITEMS.get(DeviceType.HDMI_SWITCH),
+                DEVICE_ITEMS.get(DeviceType.USB_HUB), DEVICE_ITEMS.get(DeviceType.MICROPHONE), DEVICE_ITEMS.get(DeviceType.CAMERA));
         tab("network_devices", DEVICE_ITEMS.get(DeviceType.SWITCH), DEVICE_ITEMS.get(DeviceType.SWITCH),
                 DEVICE_ITEMS.get(DeviceType.MANAGED_SWITCH), DEVICE_ITEMS.get(DeviceType.ROUTER), DEVICE_ITEMS.get(DeviceType.ACCESS_POINT));
         tab("internet", DEVICE_ITEMS.get(DeviceType.MODEM), DEVICE_ITEMS.get(DeviceType.MODEM));

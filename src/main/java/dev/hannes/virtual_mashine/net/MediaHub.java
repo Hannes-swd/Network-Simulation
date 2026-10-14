@@ -39,6 +39,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <ul>
  * <li>their sound goes to the players near them (positional) or with their screen open (directly),</li>
  * <li>the voices of players at a microphone go to the sound card of the computer it is plugged into,</li>
+ * <li>so do the game's sounds around a microphone set to hear them, mixed by the game of a player nearby,</li>
  * <li>a camera is filmed by the game of a player near it, and the pictures go to its computer.</li>
  * </ul>
  * Sound arrives on the machines' own threads; who hears what is decided on the server thread a few
@@ -49,6 +50,8 @@ public final class MediaHub {
     static final double HEAR_RANGE = 24;
     /** A microphone picks up voices up to this far away. */
     static final double MIC_RANGE = 8;
+    /** A player this close to a microphone set to game sounds records them with their game. */
+    static final double GAME_SOUND_RANGE = 32;
     /** A player this close to a camera films it with their game. */
     static final double CAMERA_RANGE = 64;
 
@@ -71,6 +74,8 @@ public final class MediaHub {
     /** Player → machine whose screen they have open. */
     private final Map<UUID, UUID> focus = new ConcurrentHashMap<>();
     private final Map<UUID, MicTarget> micTargets = new HashMap<>();
+    /** Microphone hearing game sounds → the player whose game mixes them. */
+    private final Map<UUID, UUID> gameSoundRenderers = new HashMap<>();
     /** Camera → the player whose game films it. */
     private final Map<UUID, UUID> cameraRenderers = new HashMap<>();
     private final Map<UUID, Assembly> assemblies = new HashMap<>();
@@ -96,6 +101,7 @@ public final class MediaHub {
         if (ticks % 5 == 0) {
             updateHearers();
             updateMicrophones();
+            updateGameSoundMics();
         }
         if (ticks % 10 == 0) {
             updateCameras();
@@ -147,7 +153,8 @@ public final class MediaHub {
             double bestDistance = Double.MAX_VALUE;
             for (UUID mic : mics) {
                 NetworkManager.Placed placed = network.placed(mic);
-                if (placed == null || !placed.dimension().equals(NetworkManager.dimensionOf(player.level())) || !network.usbEnabled(mic)) {
+                if (placed == null || !placed.dimension().equals(NetworkManager.dimensionOf(player.level())) || !network.usbEnabled(mic)
+                        || !network.micMode(mic).hearsVoices()) {
                     continue;
                 }
                 double distance = player.getEyePosition().distanceTo(Vec3.atCenterOf(placed.pos()));
@@ -194,6 +201,87 @@ public final class MediaHub {
             samples[i] = buf.getShort();
         }
         mic.feed(player.getUUID(), samples, samples.length, target.gain);
+    }
+
+    /**
+     * Microphones set to hear the game: the nearest player's game mixes the sounds playing around each
+     * of them (it has the sound files and hears the world there) and sends them back.
+     */
+    private void updateGameSoundMics() {
+        Map<UUID, UUID> wanted = new HashMap<>();
+        for (UUID mic : network.devicesOfType(DeviceType.MICROPHONE)) {
+            NetworkManager.Placed placed = network.placed(mic);
+            if (placed == null || !network.usbEnabled(mic) || !network.micMode(mic).hearsGame() || micInput(mic) == null) {
+                continue;
+            }
+            Vec3 centre = Vec3.atCenterOf(placed.pos());
+            ServerPlayer current = gameSoundRenderers.containsKey(mic) ? server.getPlayerList().getPlayer(gameSoundRenderers.get(mic)) : null;
+            if (current != null && inRange(current, placed, centre, GAME_SOUND_RANGE)) {
+                wanted.put(mic, current.getUUID());
+                continue;
+            }
+            ServerPlayer nearest = null;
+            double nearestDistance = Double.MAX_VALUE;
+            for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+                double distance = player.distanceToSqr(centre);
+                if (inRange(player, placed, centre, GAME_SOUND_RANGE) && distance < nearestDistance) {
+                    nearest = player;
+                    nearestDistance = distance;
+                }
+            }
+            if (nearest != null) {
+                wanted.put(mic, nearest.getUUID());
+            }
+        }
+        for (Map.Entry<UUID, UUID> entry : gameSoundRenderers.entrySet()) {
+            if (!Objects.equals(wanted.get(entry.getKey()), entry.getValue())) {
+                ServerPlayer player = server.getPlayerList().getPlayer(entry.getValue());
+                if (player != null) {
+                    ServerPlayNetworking.send(player, new MediaPayloads.MicGameJob(entry.getKey(), 0, 0, 0, false));
+                }
+            }
+        }
+        for (Map.Entry<UUID, UUID> entry : wanted.entrySet()) {
+            if (!entry.getValue().equals(gameSoundRenderers.get(entry.getKey()))) {
+                ServerPlayer player = server.getPlayerList().getPlayer(entry.getValue());
+                NetworkManager.Placed placed = network.placed(entry.getKey());
+                if (player != null && placed != null) {
+                    Vec3 centre = Vec3.atCenterOf(placed.pos());
+                    ServerPlayNetworking.send(player, new MediaPayloads.MicGameJob(entry.getKey(), centre.x, centre.y, centre.z, true));
+                }
+            }
+        }
+        gameSoundRenderers.clear();
+        gameSoundRenderers.putAll(wanted);
+    }
+
+    /** The line-in a microphone feeds: of the running computer it is plugged into (also through hubs). */
+    private @Nullable SpiceMicrophone micInput(UUID mic) {
+        UUID host = network.usbHost(mic);
+        VirtualMachine vm = host == null ? null : vms.runningMachine(host);
+        return vm == null ? null : vm.microphone();
+    }
+
+    /** The game's sounds at a microphone, from the player whose game mixes them. */
+    public void gameAudio(ServerPlayer player, MediaPayloads.MicGameAudio payload) {
+        if (!player.getUUID().equals(gameSoundRenderers.get(payload.mic())) || payload.pcm().length < 2
+                || !network.usbEnabled(payload.mic()) || !network.micMode(payload.mic()).hearsGame()) {
+            return;
+        }
+        SpiceMicrophone input = micInput(payload.mic());
+        if (input == null) {
+            return;
+        }
+        ByteBuffer buf = ByteBuffer.wrap(payload.pcm()).order(ByteOrder.LITTLE_ENDIAN);
+        short[] samples = new short[payload.pcm().length / 2];
+        for (int i = 0; i < samples.length; i++) {
+            samples[i] = buf.getShort();
+        }
+        input.feed(payload.mic(), samples, samples.length, 1.0F); // Its own source, mixed with the voices.
+    }
+
+    private static boolean inRange(ServerPlayer player, NetworkManager.Placed placed, Vec3 centre, double range) {
+        return placed.dimension().equals(NetworkManager.dimensionOf(player.level())) && player.distanceToSqr(centre) <= range * range;
     }
 
     private void updateCameras() {
@@ -370,7 +458,10 @@ public final class MediaHub {
 
     /** What a microphone or camera does right now, for the message when it is switched. */
     public Component usbStatus(UUID device, DeviceType type) {
-        Component name = Component.translatable(type.translationKey());
+        Component name = type == DeviceType.MICROPHONE && network.usbEnabled(device)
+                ? Component.translatable("virtual_mashine.mic.named", Component.translatable(type.translationKey()),
+                        Component.translatable(network.micMode(device).translationKey()))
+                : Component.translatable(type.translationKey());
         if (!network.usbEnabled(device)) {
             return Component.translatable("virtual_mashine.usb.off", name);
         }
@@ -396,6 +487,7 @@ public final class MediaHub {
         focus.remove(player);
         micTargets.remove(player);
         cameraRenderers.values().removeIf(player::equals);
+        gameSoundRenderers.values().removeIf(player::equals);
     }
 
     public void close() {

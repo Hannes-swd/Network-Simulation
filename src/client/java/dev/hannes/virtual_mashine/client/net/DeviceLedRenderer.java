@@ -33,7 +33,7 @@ public final class DeviceLedRenderer implements BlockEntityRenderer<DeviceBlockE
         Direction facing = Direction.NORTH;
         int link;
         int activity;
-        /** Display: texture of its picture (null = nothing to show) and its size in blocks. */
+        /** Display: texture of its picture (own page or a computer over HDMI; null = nothing to show) and its size in blocks. */
         @Nullable Identifier screen;
         int screenWidth;
         int screenHeight;
@@ -65,7 +65,7 @@ public final class DeviceLedRenderer implements BlockEntityRenderer<DeviceBlockE
             state.screenWidth = device.displayWidth();
             state.screenHeight = device.displayHeight();
             state.screen = DisplayManager.frame(device.getPcId(), device.getBlockPos(), state.facing, state.screenWidth,
-                    state.screenHeight, device.displayPort());
+                    state.screenHeight, device.displayPort(), device.displaySource(), device.displayHead());
         }
     }
 
@@ -93,8 +93,8 @@ public final class DeviceLedRenderer implements BlockEntityRenderer<DeviceBlockE
         boolean blinkOn = (System.currentTimeMillis() / 90) % 2 == 0;
         collector.submitCustomGeometry(poseStack, RenderTypes.entitySolid(TEXTURE), (pose, buffer) -> {
             for (int port = 0; port < Math.min(32, type.totalPorts()); port++) {
-                if ((state.link & (1 << port)) == 0 || type.isUsbPort(port)) {
-                    continue; // USB sockets have no LEDs.
+                if ((state.link & (1 << port)) == 0 || type.isUsbPort(port) || type.isHdmiPort(port)) {
+                    continue; // USB and HDMI sockets have no LEDs.
                 }
                 Vec3 socket = DeviceGeometry.socket(type, net.minecraft.core.BlockPos.ZERO, state.facing, port);
                 // Same faces as DeviceGeometry: switches/routers have network ports in front, everything else at the back.

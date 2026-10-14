@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "pattern": [
+    "NNN",
+    "IRI"
+  ],
+  "key": {
+    "N": "minecraft:iron_nugget",
+    "I": "minecraft:iron_ingot",
+    "R": "minecraft:repeater"
+  },
+  "result": {
+    "id": "virtual_mashine:usb_hub",
+    "count": 1
+  }
+}

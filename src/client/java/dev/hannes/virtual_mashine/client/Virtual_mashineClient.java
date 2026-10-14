@@ -5,6 +5,7 @@ import dev.hannes.virtual_mashine.client.net.CableRenderer;
 import dev.hannes.virtual_mashine.client.net.DeviceLedRenderer;
 import dev.hannes.virtual_mashine.client.display.DisplayManager;
 import dev.hannes.virtual_mashine.client.media.CameraCapture;
+import dev.hannes.virtual_mashine.client.media.GameSoundTap;
 import dev.hannes.virtual_mashine.client.media.MicCapture;
 import dev.hannes.virtual_mashine.client.media.VmSound;
 import dev.hannes.virtual_mashine.network.MediaPayloads;
@@ -65,14 +66,18 @@ public class Virtual_mashineClient implements ClientModInitializer {
         ClientPlayNetworking.registerGlobalReceiver(MediaPayloads.VmAudio.TYPE, (payload, context) -> VmSound.onAudio(payload));
         ClientPlayNetworking.registerGlobalReceiver(MediaPayloads.MicState.TYPE, (payload, context) -> MicCapture.onState(payload));
         ClientPlayNetworking.registerGlobalReceiver(MediaPayloads.CameraJob.TYPE, (payload, context) -> CameraCapture.onJob(payload));
+        ClientPlayNetworking.registerGlobalReceiver(MediaPayloads.MicGameJob.TYPE, (payload, context) -> GameSoundTap.onJob(payload));
         ClientTickEvents.END_CLIENT_TICK.register(DisplayManager::tick);
         ClientTickEvents.END_CLIENT_TICK.register(VmSound::tick);
         ClientTickEvents.END_CLIENT_TICK.register(MicCapture::tick);
+        ClientTickEvents.END_CLIENT_TICK.register(GameSoundTap::tick);
         HudElementRegistry.attachElementAfter(VanillaHudElements.MISC_OVERLAYS, Virtual_mashine.id("microphone"), MicCapture::hud);
+        HudElementRegistry.attachElementAfter(VanillaHudElements.MISC_OVERLAYS, Virtual_mashine.id("monitor_control"), DisplayManager::hud);
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             DisplayManager.disconnectAll();
             VmSound.stopAll();
             MicCapture.reset();
+            GameSoundTap.reset();
             CameraCapture.reset();
             TunnelTransport.closeAll();
             CableRenderer.clear();

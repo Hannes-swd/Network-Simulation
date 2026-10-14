@@ -3,6 +3,7 @@ package dev.hannes.virtual_mashine.block;
 import dev.hannes.virtual_mashine.ModRegistry;
 import dev.hannes.virtual_mashine.device.DeviceType;
 import dev.hannes.virtual_mashine.net.IoModule;
+import dev.hannes.virtual_mashine.net.MicMode;
 import net.minecraft.core.Direction;
 import dev.hannes.virtual_mashine.vm.VmManager;
 import net.minecraft.core.BlockPos;
@@ -41,8 +42,15 @@ public class DeviceBlockEntity extends BlockEntity {
     private int displayWidth = 2;
     private int displayHeight = 1;
     private int displayPort;
+    /** Display: the computer whose screen arrives over HDMI (null = its own system) and which of its screens. */
+    private @Nullable UUID displaySource;
+    private int displayHead;
     /** Microphone and camera: the switch on the device. */
     private boolean usbEnabled = true;
+    /** Microphone: what it picks up, a {@link MicMode} index. */
+    private int micMode;
+    /** HDMI switch: the same picture on all outputs instead of a screen of its own each. */
+    private boolean hdmiMirrored;
 
     public DeviceBlockEntity(BlockPos pos, BlockState state) {
         super(ModRegistry.DEVICE_BLOCK_ENTITY, pos, state);
@@ -84,8 +92,34 @@ public class DeviceBlockEntity extends BlockEntity {
         return displayPort;
     }
 
+    public @Nullable UUID displaySource() {
+        return displaySource;
+    }
+
+    public int displayHead() {
+        return displayHead;
+    }
+
     public boolean usbEnabled() {
         return usbEnabled;
+    }
+
+    public MicMode micMode() {
+        return MicMode.byIndex(micMode);
+    }
+
+    public void setMicMode(MicMode mode) {
+        micMode = mode.ordinal();
+        setChanged();
+    }
+
+    public boolean hdmiMirrored() {
+        return hdmiMirrored;
+    }
+
+    public void setHdmiMirrored(boolean mirrored) {
+        hdmiMirrored = mirrored;
+        setChanged();
     }
 
     public void setUsbEnabled(boolean enabled) {
@@ -140,17 +174,26 @@ public class DeviceBlockEntity extends BlockEntity {
             if (block.deviceType().isUsbDevice()) {
                 manager.network().setUsbEnabled(device.pcId, device.usbEnabled);
             }
+            if (block.deviceType() == DeviceType.MICROPHONE) {
+                manager.network().setMicMode(device.pcId, device.micMode());
+            }
+            if (block.deviceType() == DeviceType.HDMI_SWITCH) {
+                manager.network().setHdmiMirrored(device.pcId, device.hdmiMirrored);
+            }
         }
         boolean powered = manager.network().isPowered(device.pcId, block.deviceType());
         if (state.getValue(DeviceBlock.LIT) != powered) {
             level.setBlock(pos, state.setValue(DeviceBlock.LIT, powered), Block.UPDATE_ALL);
         }
         if (block.deviceType() == DeviceType.DISPLAY) {
-            int[] display = manager.displayState(device.pcId);
-            if (display[0] != device.displayWidth || display[1] != device.displayHeight || display[2] != device.displayPort) {
-                device.displayWidth = display[0];
-                device.displayHeight = display[1];
-                device.displayPort = display[2];
+            VmManager.DisplayView view = manager.displayView(device.pcId);
+            if (view.width() != device.displayWidth || view.height() != device.displayHeight || view.port() != device.displayPort
+                    || !java.util.Objects.equals(view.source(), device.displaySource) || view.head() != device.displayHead) {
+                device.displayWidth = view.width();
+                device.displayHeight = view.height();
+                device.displayPort = view.port();
+                device.displaySource = view.source();
+                device.displayHead = view.head();
                 device.setChanged();
                 level.sendBlockUpdated(pos, state, state, Block.UPDATE_CLIENTS);
             }
@@ -185,7 +228,11 @@ public class DeviceBlockEntity extends BlockEntity {
         displayWidth = input.getIntOr("display_width", 2);
         displayHeight = input.getIntOr("display_height", 1);
         displayPort = input.getIntOr("display_port", 0);
+        displaySource = input.read("display_source", UUIDUtil.CODEC).orElse(null);
+        displayHead = input.getIntOr("display_head", 0);
         usbEnabled = input.getBooleanOr("usb_enabled", true);
+        hdmiMirrored = input.getBooleanOr("hdmi_mirrored", false);
+        micMode = input.getIntOr("mic_mode", 0);
     }
 
     @Override
@@ -198,7 +245,11 @@ public class DeviceBlockEntity extends BlockEntity {
         output.putInt("display_width", displayWidth);
         output.putInt("display_height", displayHeight);
         output.putInt("display_port", displayPort);
+        output.storeNullable("display_source", UUIDUtil.CODEC, displaySource);
+        output.putInt("display_head", displayHead);
         output.putBoolean("usb_enabled", usbEnabled);
+        output.putBoolean("hdmi_mirrored", hdmiMirrored);
+        output.putInt("mic_mode", micMode);
     }
 
     @Override

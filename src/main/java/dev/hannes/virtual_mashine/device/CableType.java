@@ -13,9 +13,11 @@ public enum CableType {
     /** Rollover console cable from a computer's serial port to a router or switch console. */
     CONSOLE("console", Kind.CONSOLE, 10, 0x7FC8E8),
     /** USB 2.0 with an active extension: connects a microphone or camera to a computer. */
-    USB("usb", Kind.USB, 10, 0x3A3A3E);
+    USB("usb", Kind.USB, 10, 0x3A3A3E),
+    /** HDMI 2.0: carries a computer's picture to a monitor or an HDMI switch. */
+    HDMI("hdmi", Kind.HDMI, 15, 0x2A2A2A);
 
-    public enum Kind { COPPER, FIBER, CONSOLE, USB }
+    public enum Kind { COPPER, FIBER, CONSOLE, USB, HDMI }
 
     public final String id;
     public final Kind kind;
@@ -37,7 +39,11 @@ public enum CableType {
         return kind == Kind.USB;
     }
 
-    /** Console and USB cables do not carry network frames. */
+    public boolean isHdmi() {
+        return kind == Kind.HDMI;
+    }
+
+    /** Console, USB and HDMI cables do not carry network frames. */
     public boolean isNetwork() {
         return kind == Kind.COPPER || kind == Kind.FIBER;
     }
@@ -50,6 +56,7 @@ public enum CableType {
             case CAT6A, CAT7, FIBER -> 10_000;
             case CONSOLE -> 0;
             case USB -> 480;
+            case HDMI -> 18_000;
         };
     }
 

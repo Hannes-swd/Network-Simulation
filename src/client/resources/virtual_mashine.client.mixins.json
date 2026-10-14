@@ -9,7 +9,8 @@
     "LevelRendererAccessor",
     "MinecraftAccessor",
     "MinecraftRenderMixin",
-    "MouseHandlerMixin"
+    "MouseHandlerMixin",
+    "SoundEngineMixin"
   ],
   "injectors": {
     "defaultRequire": 1

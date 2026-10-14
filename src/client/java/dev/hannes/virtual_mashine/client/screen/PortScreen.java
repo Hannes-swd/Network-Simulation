@@ -168,6 +168,10 @@ public class PortScreen extends Screen {
             drawUsbSocket(graphics, x, y, port, hover);
             return;
         }
+        if (isHdmi(index)) {
+            drawHdmiSocket(graphics, x, y, port, hover);
+            return;
+        }
         // Console/COM sockets are light blue, like the rollover cables that go into them.
         int housing = port.console() ? (hover ? 0xFF4F86A8 : 0xFF35607A) : (hover ? 0xFF6A6E75 : 0xFF4A4D52);
         graphics.fill(x, y, x + socketWidth, y + SOCKET_H, housing);
@@ -198,6 +202,29 @@ public class PortScreen extends Screen {
         return DeviceType.byId(view.deviceType()).isUsbPort(index);
     }
 
+    private boolean isHdmi(int index) {
+        return DeviceType.byId(view.deviceType()).isHdmiPort(index);
+    }
+
+    /** An HDMI socket: wide, with the bevelled lower corners; the plug in the cable's colour. */
+    private void drawHdmiSocket(GuiGraphicsExtractor graphics, int x, int y, NetPayloads.PortInfo port, boolean hover) {
+        graphics.fill(x, y, x + socketWidth, y + SOCKET_H, hover ? 0xFF5C5F66 : 0xFF3C3E43);
+        int holeX = x + 4;
+        int holeY = y + 8;
+        int holeW = socketWidth - 8;
+        graphics.fill(holeX, holeY, holeX + holeW, holeY + 5, 0xFF101114);
+        graphics.fill(holeX + 2, holeY + 5, holeX + holeW - 2, holeY + 7, 0xFF101114);
+        graphics.fill(holeX + 3, holeY + 2, holeX + holeW - 3, holeY + 4, 0xFFC9A227); // Gold contacts.
+        if (port.state() != NetPayloads.PortInfo.FREE) {
+            graphics.fill(holeX - 2, holeY - 2, holeX + holeW + 2, holeY + 9, 0xFF000000 | port.color());
+            graphics.fill(holeX, holeY, holeX + holeW, holeY + 5, 0xFFB8BCC2);
+        }
+        // Picture LED: lit while a running computer's picture goes through this socket.
+        graphics.fill(x + socketWidth / 2 - 2, y + 2, x + socketWidth / 2 + 2, y + 5, port.link() ? 0xFF3DA8FF : 0xFF1A2633);
+        String name = port.name();
+        graphics.text(font, name, x + (socketWidth - font.width(name)) / 2, y + SOCKET_H + 3, port.link() ? GREEN : GRAY, false);
+    }
+
     /** A flat USB-A socket: no LEDs, the plug in the cable's colour. */
     private void drawUsbSocket(GuiGraphicsExtractor graphics, int x, int y, NetPayloads.PortInfo port, boolean hover) {
         graphics.fill(x, y, x + socketWidth, y + SOCKET_H, hover ? 0xFF5C5F66 : 0xFF3C3E43);
@@ -216,16 +243,25 @@ public class PortScreen extends Screen {
 
     private List<Component> tooltip(int index) {
         NetPayloads.PortInfo port = view.ports().get(index);
-        if (!isUsb(index)) {
+        if (!isUsb(index) && !isHdmi(index)) {
             return tooltip(port);
         }
+        DeviceType type = DeviceType.byId(view.deviceType());
         List<Component> lines = new ArrayList<>();
         lines.add(Component.literal(port.name()));
-        lines.add(Component.translatable("virtual_mashine.ports.tip.usb"));
+        if (isHdmi(index)) {
+            lines.add(Component.translatable(type.isHdmiOutput(index) ? "virtual_mashine.ports.tip.hdmi_out" : "virtual_mashine.ports.tip.hdmi_in"));
+        } else {
+            lines.add(Component.translatable(type.isUsbUpstream(index) ? "virtual_mashine.ports.tip.usb_up" : "virtual_mashine.ports.tip.usb"));
+        }
         switch (port.state()) {
             case NetPayloads.PortInfo.CONNECTED -> {
                 lines.add(Component.translatable("virtual_mashine.ports.tip.connected", port.peer()));
-                lines.add(Component.translatable(port.link() ? "virtual_mashine.ports.tip.link" : "virtual_mashine.ports.tip.no_link"));
+                if (isHdmi(index)) {
+                    lines.add(Component.translatable(port.link() ? "virtual_mashine.ports.tip.picture" : "virtual_mashine.ports.tip.no_picture"));
+                } else {
+                    lines.add(Component.translatable(port.link() ? "virtual_mashine.ports.tip.link" : "virtual_mashine.ports.tip.no_link"));
+                }
                 lines.add(Component.translatable("virtual_mashine.ports.tip.click_unplug"));
             }
             case NetPayloads.PortInfo.HALF -> {

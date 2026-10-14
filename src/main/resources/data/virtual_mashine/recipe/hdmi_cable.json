@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "pattern": [
+    "GCG",
+    " R "
+  ],
+  "key": {
+    "G": "minecraft:gold_nugget",
+    "C": "minecraft:copper_ingot",
+    "R": "minecraft:black_dye"
+  },
+  "result": {
+    "id": "virtual_mashine:hdmi_cable",
+    "count": 2
+  }
+}

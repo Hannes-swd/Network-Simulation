@@ -186,9 +186,39 @@ while true; do
 done
 ```
 
+## Monitore über HDMI (mehrere Bildschirme)
+
+Der Monitor-Block (früher „Display“) zeigt über ein **HDMI-Kabel** das Bild eines PCs, Laptops oder Servers –
+direkt in der Welt, so groß, wie du ihn einstellst (bis 8 x 6 Blöcke). Jeder Computer hat dafür eine
+Grafikkarte mit 4 Bildschirmen; im Betriebssystem sind das ganz normale Monitore.
+
+- **Anschließen:** HDMI-Kabel in die Hand, Schleichen + Rechtsklick auf den PC → `HDMI 1` (bzw. `HDMI 2`),
+  dann Schleichen + Rechtsklick auf den Monitor → `HDMI IN`. PC: 2 HDMI-Buchsen, Laptop und Server: 1
+  (beim Laptop ist der eingebaute Bildschirm Nummer 1, der HDMI-Monitor ist der zweite).
+- **HDMI-Switch:** `IN` an den Computer, bis zu 4 Monitore an `OUT 1–4`. Rechtsklick schaltet um:
+  **Erweitern** (jeder Ausgang ist ein eigener Bildschirm) oder **Duplizieren** (überall dasselbe Bild).
+  Switches lassen sich hintereinanderstecken; mehr als 4 Bildschirme pro Computer gibt es nicht.
+- **Erweitern oder spiegeln im Betriebssystem:** Ubuntu stellt neue Monitore automatisch daneben
+  (Einstellungen → Anzeigen → „Verbinden“ / „Spiegeln“, Anordnung per Ziehen). Die Auflösung kommt aus der
+  Größe des Monitors (z. B. 2 x 1 Blöcke = 1920 x 960).
+- **Von außen bedienen:** draufschauen – der Mauszeiger folgt dem Fadenkreuz, auch über mehrere Monitore
+  desselben PCs hinweg. Ein Klick gibt dem PC zusätzlich die **Tastatur** (du bleibst stehen, umsehen bewegt
+  die Maus); **Strg links + Alt links** gibt Tastatur und Maus an Minecraft zurück.
+- Das Fenster des PCs (Rechtsklick auf den PC) zeigt Bildschirm 1; der Knopf „Bildschirm“ wechselt zu den
+  anderen.
+- Damit die Maus auf dem 2., 3., 4. Bildschirm genau trifft, braucht das Betriebssystem `spice-vdagent`
+  (bei Ubuntu-, Debian- und Fedora-Desktops schon dabei).
+- Die neue Grafikkarte bekommt ein PC beim nächsten **Neustart** (nicht beim Fortsetzen nach Einfrieren).
+  Für Systeme, die nur die alte Karte kennen: Steuerung → „Bildschirme: VGA“ (dann zeigen alle Monitore
+  dasselbe Bild).
+
+**USB-Hub:** `Host` per USB-Kabel an den Computer (oder an einen anderen Hub), an `USB 1–4` kommen
+Mikrofone, Kameras oder weitere Hubs.
+
 ## Display (Netzwerk)
 
-Ein Bildschirm-Block mit eigenem kleinem System (Debian + Firefox im Vollbild): Kabel zum Switch, eine
+Ohne HDMI-Kabel kann der Monitor wie bisher ein eigenes kleines System (Debian + Firefox im Vollbild)
+betreiben: Kabel zum Switch, eine
 Adresse eintragen, und er zeigt die Seite dauerhaft direkt in der Welt – z. B. eine Karte deiner Basis mit
 Knöpfen für Türen (über das I/O-Modul). Größe einstellbar bis 8 x 6 Blöcke (wächst nach rechts und oben).
 
@@ -207,7 +237,10 @@ Knöpfen für Türen (über das I/O-Modul). Größe einstellbar bis 8 x 6 Blöck
 - **Mikrofon (USB):** Block aufstellen, mit dem **USB-Kabel** an einen PC, Laptop, Server oder ein Display
   stecken (Schleichen + Rechtsklick öffnet die Buchsen). Was Spieler in seiner Nähe (bis 8 Blöcke) sagen, kommt im
   Computer als Mikrofon an (Line-In der Soundkarte, jedes Betriebssystem). Oben links steht, solange dein
-  Mikrofon aufnimmt. Rechtsklick auf den Block: an/aus. Ganz abschalten: `"allowMicrophone": false` in
+  Mikrofon aufnimmt. Rechtsklick auf den Block schaltet weiter: **Stimmen** → **Stimmen + Spielgeräusche** →
+  **nur Spielgeräusche** → aus. Spielgeräusche sind alles, was in der Welt rund ums Mikrofon zu hören ist
+  (Schritte, Tiere, Plattenspieler …, leiser mit Abstand); der Ton der Computer selbst gehört nicht dazu.
+  Mehrere Mikrofone an einem Computer (z. B. über einen USB-Hub) landen gemischt im selben Eingang. Ganz abschalten: `"allowMicrophone": false` in
   `config/virtual_mashine.json`.
 - **Kamera (USB):** genauso einstecken. Sie filmt die Minecraft-Welt vor ihrem Objektiv (auch dich) und gibt das Bild
   als Webcam in den Computer – z. B. für Discord im Browser. Gefilmt wird vom Spiel eines Spielers in der Nähe.

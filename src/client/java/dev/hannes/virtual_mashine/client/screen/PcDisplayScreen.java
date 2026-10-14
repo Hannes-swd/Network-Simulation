@@ -5,11 +5,10 @@ import dev.hannes.virtual_mashine.client.vnc.RfbClient;
 import dev.hannes.virtual_mashine.client.vnc.RfbTransport;
 import dev.hannes.virtual_mashine.client.vnc.TextTyper;
 import dev.hannes.virtual_mashine.client.vnc.TunnelTransport;
-import dev.hannes.virtual_mashine.client.vnc.VncKeys;
+import dev.hannes.virtual_mashine.client.vnc.VncKeyboard;
 import dev.hannes.virtual_mashine.network.MediaPayloads;
 import dev.hannes.virtual_mashine.network.PcActionPayload;
 import dev.hannes.virtual_mashine.network.PcInfoPayload;
-import dev.hannes.virtual_mashine.vm.HostInfo;
 import dev.hannes.virtual_mashine.vm.VmConfig;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -23,15 +22,15 @@ import net.minecraft.network.chat.Component;
 import org.jspecify.annotations.Nullable;
 import org.lwjgl.glfw.GLFW;
 
-import java.util.LinkedHashMap;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Optional;
 
 /**
  * Shows the guest screen. Clicking into it captures keyboard and mouse: every key (including
  * ESC and F-keys) then goes to the guest until Left Ctrl + Left Alt releases it again.
  * Closing the screen leaves the machine running in the background.
+ * <p>
+ * A machine with several screens (HDMI monitors) shows one of them; the screen button switches.
  * <p>
  * The clipboard is shared with the guest (when spice-vdagent runs there): the guest's copies arrive
  * at once, this computer's clipboard is handed over when the player clicks into the screen. The
@@ -40,13 +39,12 @@ import java.util.Optional;
 public class PcDisplayScreen extends PcScreen {
     private static final int TOOLBAR = 24;
     private static final int FOOTER = 12;
-    private static final int KEY_ACTION_RELEASE = 0;
-    private static final int KEY_ACTION_PRESS = 1;
     private static final SystemToast.SystemToastId MESSAGE_TOAST = new SystemToast.SystemToastId(8000L);
 
     private final VmScreenTexture texture = new VmScreenTexture();
-    /** Keys currently held down in the guest: GLFW key (or negative raw scancode) to {scancode, keysym}. */
-    private final Map<Integer, int[]> heldKeys = new LinkedHashMap<>();
+    private final VncKeyboard keyboard = new VncKeyboard();
+    /** Which screen of the graphics card is shown. */
+    private int head;
 
     private @Nullable RfbClient client;
     private boolean captured;
@@ -63,6 +61,7 @@ public class PcDisplayScreen extends PcScreen {
     private Button ctrlAltDelButton;
     private Button pasteButton;
     private Button layoutButton;
+    private Button screenButton;
 
     private int viewX;
     private int viewY;
@@ -81,6 +80,7 @@ public class PcDisplayScreen extends PcScreen {
                 Component.translatable("virtual_mashine.button.ctrl_alt_del"),
                 Component.translatable("virtual_mashine.button.paste"),
                 layoutLabel(),
+                screenLabel(),
                 Component.translatable("virtual_mashine.button.shutdown"),
                 Component.translatable("virtual_mashine.button.reset"),
                 Component.translatable("virtual_mashine.button.power_off"),
@@ -107,6 +107,7 @@ public class PcDisplayScreen extends PcScreen {
                 b -> sendCtrlAltDel(),
                 b -> pasteAsKeys(),
                 b -> toggleLayout(),
+                b -> nextScreen(),
                 b -> send(PcActionPayload.SHUTDOWN),
                 b -> send(PcActionPayload.RESET),
                 b -> send(PcActionPayload.POWER_OFF),
@@ -120,10 +121,12 @@ public class PcDisplayScreen extends PcScreen {
         ctrlAltDelButton = buttons[1];
         pasteButton = buttons[2];
         layoutButton = buttons[3];
-        shutdownButton = buttons[4];
-        resetButton = buttons[5];
-        powerOffButton = buttons[6];
-        freezeButton = buttons[7];
+        screenButton = buttons[4];
+        shutdownButton = buttons[5];
+        resetButton = buttons[6];
+        powerOffButton = buttons[7];
+        freezeButton = buttons[8];
+        screenButton.setTooltip(Tooltip.create(Component.translatable("virtual_mashine.button.screen.tooltip")));
         pasteButton.setTooltip(Tooltip.create(Component.translatable("virtual_mashine.button.paste.tooltip")));
         layoutButton.setTooltip(Tooltip.create(Component.translatable("virtual_mashine.button.layout.tooltip")));
         shutdownButton.setTooltip(Tooltip.create(Component.translatable("virtual_mashine.button.shutdown.tooltip")));
@@ -162,16 +165,56 @@ public class PcDisplayScreen extends PcScreen {
         ctrlAltDelButton.active = running;
         pasteButton.active = running;
         layoutButton.setMessage(layoutLabel());
+        if (!isActiveScreen(head)) {
+            head = 0; // Its monitor was unplugged.
+        }
+        screenButton.setMessage(screenLabel());
+        screenButton.active = running && Integer.bitCount(info.activeScreens()) > 1;
         freezeButton.active = running && info.canFreeze();
         freezeButton.setTooltip(Tooltip.create(Component.translatable(info.canFreeze()
                 ? "virtual_mashine.button.freeze.tooltip" : "virtual_mashine.button.freeze.unsupported")));
     }
 
+    /** VNC port of the screen shown, -1 if there is none. */
+    private int screenPort() {
+        if (head == 0) {
+            return info.vncPort();
+        }
+        return head < info.screenPorts().size() && isRunning(info) ? info.screenPorts().get(head) : -1;
+    }
+
+    private boolean isActiveScreen(int screen) {
+        return screen == 0 || (info.activeScreens() & (1 << screen)) != 0 && screen < info.screenPorts().size();
+    }
+
+    private Component screenLabel() {
+        return Component.translatable("virtual_mashine.button.screen", head + 1);
+    }
+
+    /** Shows the next screen that has a monitor. */
+    private void nextScreen() {
+        int count = Math.max(1, info.screenPorts().size());
+        for (int step = 1; step <= count; step++) {
+            int candidate = (head + step) % count;
+            if (isActiveScreen(candidate)) {
+                if (candidate != head) {
+                    releaseCapture();
+                    head = candidate;
+                    reconnectDelay = 0;
+                    connectIfNeeded();
+                }
+                break;
+            }
+        }
+        screenButton.setMessage(screenLabel());
+    }
+
     private void connectIfNeeded() {
-        if (!isRunning(info) || info.vncPort() <= 0) {
+        int port = screenPort();
+        if (!isRunning(info) || port <= 0) {
             return;
         }
-        if (client != null && client.port() == info.vncPort() && client.status() != RfbClient.Status.CLOSED) {
+        if (client != null && client.port() == port && client.status() != RfbClient.Status.CLOSED) {
             return;
         }
         if (reconnectDelay > 0) {
@@ -181,8 +224,8 @@ public class PcDisplayScreen extends PcScreen {
             client.close();
         }
         // The host's game runs next to QEMU; everybody else gets the screen through the Minecraft connection.
-        RfbTransport transport = isHost() ? RfbTransport.local(info.vncPort()) : new TunnelTransport(pcId());
-        client = new RfbClient(transport, info.vncPort());
+        RfbTransport transport = isHost() ? RfbTransport.local(port) : new TunnelTransport(pcId(), head);
+        client = new RfbClient(transport, port);
         reconnectDelay = 20;
     }
 
@@ -440,47 +483,18 @@ public class PcDisplayScreen extends PcScreen {
     }
 
     public void handleRawKey(KeyEvent event, int action) {
-        int key = event.key();
-        if (action == KEY_ACTION_PRESS && isReleaseCombo(key)) {
+        if (action == VncKeyboard.ACTION_PRESS && VncKeyboard.isReleaseCombo(minecraft.getWindow().handle(), event.key())) {
             releaseCapture();
             return;
         }
-        int scancode = VncKeys.scancode(key);
-        int keysym = VncKeys.keysym(key);
-        int heldId = key;
-        if (scancode == 0 && HostInfo.OS == HostInfo.Os.WINDOWS) {
-            scancode = VncKeys.fromWindowsScancode(event.scancode());
-            heldId = -event.scancode();
-        }
-        if (scancode == 0 && keysym == 0) {
-            return;
-        }
-        boolean down = action != KEY_ACTION_RELEASE;
-        if (down) {
-            heldKeys.put(heldId, new int[]{scancode, keysym});
-        } else if (heldKeys.remove(heldId) == null) {
-            return; // Released a key the guest never saw pressed (e.g. the capture click combo).
-        }
-        client.sendKey(down, scancode, keysym);
-    }
-
-    private boolean isReleaseCombo(int key) {
-        long window = minecraft.getWindow().handle();
-        return (key == GLFW.GLFW_KEY_LEFT_ALT && GLFW.glfwGetKey(window, GLFW.GLFW_KEY_LEFT_CONTROL) == GLFW.GLFW_PRESS)
-                || (key == GLFW.GLFW_KEY_LEFT_CONTROL && GLFW.glfwGetKey(window, GLFW.GLFW_KEY_LEFT_ALT) == GLFW.GLFW_PRESS);
+        keyboard.key(client, event, action);
     }
 
     private void releaseCapture() {
-        if (client != null) {
-            for (int[] held : heldKeys.values()) {
-                client.sendKey(false, held[0], held[1]);
-            }
-            if (buttonMask != 0) {
-                buttonMask = 0;
-                client.sendPointer(0, 0, 0);
-            }
+        keyboard.releaseAll(client);
+        if (client != null && buttonMask != 0) {
+            client.sendPointer(0, 0, 0);
         }
-        heldKeys.clear();
         buttonMask = 0;
         captured = false;
         setCursorHidden(false);
@@ -502,7 +516,7 @@ public class PcDisplayScreen extends PcScreen {
     @Override
     public boolean keyPressed(KeyEvent event) {
         if (isCapturingKeyboard()) {
-            handleRawKey(event, KEY_ACTION_PRESS);
+            handleRawKey(event, VncKeyboard.ACTION_PRESS);
             return true;
         }
         return super.keyPressed(event);

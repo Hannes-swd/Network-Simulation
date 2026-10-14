@@ -114,6 +114,41 @@ public final class MediaPayloads {
         }
     }
 
+    /** Server to client: record the game's sounds as heard at this microphone (x/y/z), or stop. */
+    public record MicGameJob(UUID mic, double x, double y, double z, boolean active) implements CustomPacketPayload {
+        public static final Type<MicGameJob> TYPE = new Type<>(Virtual_mashine.id("mic_game_job"));
+        public static final StreamCodec<RegistryFriendlyByteBuf, MicGameJob> CODEC = StreamCodec.ofMember(
+                (payload, buf) -> {
+                    UUIDUtil.STREAM_CODEC.encode(buf, payload.mic);
+                    buf.writeDouble(payload.x);
+                    buf.writeDouble(payload.y);
+                    buf.writeDouble(payload.z);
+                    buf.writeBoolean(payload.active);
+                },
+                buf -> new MicGameJob(UUIDUtil.STREAM_CODEC.decode(buf), buf.readDouble(), buf.readDouble(), buf.readDouble(), buf.readBoolean()));
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Client to server: the game's sounds at a microphone, 16-bit little-endian mono PCM at 24 kHz. */
+    public record MicGameAudio(UUID mic, byte[] pcm) implements CustomPacketPayload {
+        public static final Type<MicGameAudio> TYPE = new Type<>(Virtual_mashine.id("mic_game_audio"));
+        public static final StreamCodec<RegistryFriendlyByteBuf, MicGameAudio> CODEC = StreamCodec.ofMember(
+                (payload, buf) -> {
+                    UUIDUtil.STREAM_CODEC.encode(buf, payload.mic);
+                    buf.writeByteArray(payload.pcm);
+                },
+                buf -> new MicGameAudio(UUIDUtil.STREAM_CODEC.decode(buf), buf.readByteArray(MAX_MIC_BYTES)));
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
     /** Client to server: part {@code index} of {@code count} of one JPEG picture of a camera. */
     public record CameraFrame(UUID camera, int frame, int index, int count, byte[] data) implements CustomPacketPayload {
         public static final Type<CameraFrame> TYPE = new Type<>(Virtual_mashine.id("camera_frame"));

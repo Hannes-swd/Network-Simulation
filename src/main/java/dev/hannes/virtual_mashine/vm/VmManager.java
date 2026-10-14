@@ -155,14 +155,40 @@ public final class VmManager {
         return machine(id, type).config().name;
     }
 
-    /** What a display block shows: {width, height, VNC port (0 = off)}. */
-    public int[] displayState(UUID id) {
-        VirtualMachine vm = machines.get(id);
-        if (vm == null) {
-            return new int[]{2, 1, 0};
+    /**
+     * What a monitor shows: a computer's screen over HDMI while that computer runs, otherwise the page of
+     * its own small system (if that runs).
+     *
+     * @param port   VNC port of the picture, 0 = nothing to show
+     * @param source the computer on the HDMI cable, null for the monitor's own system
+     * @param head   which screen of that computer
+     */
+    public record DisplayView(int width, int height, int port, @Nullable UUID source, int head) {
+    }
+
+    public DisplayView displayView(UUID id) {
+        VirtualMachine own = machines.get(id);
+        int[] blocks = displayBlocks(id);
+        dev.hannes.virtual_mashine.net.VideoRouting.Feed feed = network.video().feed(id);
+        if (feed != null) {
+            VirtualMachine source = runningMachine(feed.source());
+            if (source != null) {
+                // A machine still on the plain VGA card has one screen: every monitor shows that one.
+                int head = source.screenPorts().length > feed.head() ? feed.head() : 0;
+                int port = source.vncPort(head);
+                if (port > 0) {
+                    return new DisplayView(blocks[0], blocks[1], port, feed.source(), head);
+                }
+            }
         }
-        VmConfig c = vm.config();
-        return new int[]{c.displayWidth, c.displayHeight, vm.state() == VirtualMachine.State.RUNNING ? vm.vncPort() : 0};
+        int port = own != null && own.state() == VirtualMachine.State.RUNNING ? own.vncPort() : 0;
+        return new DisplayView(blocks[0], blocks[1], Math.max(0, port), null, 0);
+    }
+
+    /** Size of a monitor in blocks {width, height}. */
+    public int[] displayBlocks(UUID id) {
+        VirtualMachine vm = machines.get(id);
+        return vm == null ? new int[]{2, 1} : new int[]{vm.config().displayWidth, vm.config().displayHeight};
     }
 
     public List<VirtualMachine> runningMachines() {
@@ -180,10 +206,11 @@ public final class VmManager {
     public void openTunnel(ServerPlayer player, TunnelPayloads.Open payload) {
         Set<UUID> allowed = openedBy.get(player.getUUID());
         VirtualMachine vm = machines.get(payload.pcId());
-        // Displays are watched by everyone standing near them, without opening them first.
+        // Displays, and computers on HDMI monitors, are watched by everyone standing near them without opening them first.
         boolean permitted = vm != null && (allowed != null && allowed.contains(payload.pcId())
-                || vm.deviceType() == DeviceType.DISPLAY && network.isNear(payload.pcId(), player, 96));
-        tunnels.open(player, payload.tunnelId(), permitted ? vm.vncPort() : -1);
+                || vm.deviceType() == DeviceType.DISPLAY && network.isNear(payload.pcId(), player, 96)
+                || network.seesScreen(player, payload.pcId(), payload.head(), 96));
+        tunnels.open(player, payload.tunnelId(), permitted ? vm.vncPort(payload.head()) : -1);
     }
 
     public void tunnelData(ServerPlayer player, TunnelPayloads.Data payload) {
@@ -290,6 +317,8 @@ public final class VmManager {
                 vm.messageKey(),
                 vm.messageDetail(),
                 vm.config().toJson(),
+                java.util.Arrays.stream(vm.screenPorts()).boxed().toList(),
+                vm.activeScreens(),
                 listFiles(ISO_ENDINGS),
                 listFiles(IMAGE_ENDINGS),
                 globalIsoDir.toString(),

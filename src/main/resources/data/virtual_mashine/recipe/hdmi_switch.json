@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "pattern": [
+    "GGG",
+    "BCB"
+  ],
+  "key": {
+    "G": "minecraft:gold_nugget",
+    "B": "minecraft:blackstone",
+    "C": "minecraft:comparator"
+  },
+  "result": {
+    "id": "virtual_mashine:hdmi_switch",
+    "count": 1
+  }
+}

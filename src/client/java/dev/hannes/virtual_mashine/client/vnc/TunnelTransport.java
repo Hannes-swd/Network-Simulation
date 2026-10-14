@@ -27,6 +27,8 @@ public final class TunnelTransport implements RfbTransport {
 
     private final int id = ThreadLocalRandom.current().nextInt(1, Integer.MAX_VALUE);
     private final UUID pcId;
+    /** Which screen of the machine's graphics card. */
+    private final int head;
     private final BlockingQueue<byte[]> incoming = new LinkedBlockingQueue<>();
     private volatile boolean closed;
 
@@ -95,13 +97,18 @@ public final class TunnelTransport implements RfbTransport {
     };
 
     public TunnelTransport(UUID pcId) {
+        this(pcId, 0);
+    }
+
+    public TunnelTransport(UUID pcId, int head) {
         this.pcId = pcId;
+        this.head = head;
     }
 
     @Override
     public void connect() throws IOException {
         OPEN.put(id, this);
-        if (!send(new TunnelPayloads.Open(id, pcId))) {
+        if (!send(new TunnelPayloads.Open(id, pcId, head))) {
             close();
             throw new IOException("Not connected to a server with this mod");
         }

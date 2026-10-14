@@ -1,5 +1,6 @@
 package dev.hannes.virtual_mashine.mixin.client;
 
+import dev.hannes.virtual_mashine.client.display.DisplayManager;
 import dev.hannes.virtual_mashine.client.screen.PcDisplayScreen;
 import net.minecraft.client.KeyboardHandler;
 import net.minecraft.client.Minecraft;
@@ -10,8 +11,9 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * While a PC has captured the keyboard, keys must reach the guest before Minecraft's global
- * shortcuts (fullscreen, screenshot, narrator, debug keys) can swallow them.
+ * While a PC has captured the keyboard (in its window, or through a monitor in the world), keys must
+ * reach the guest before Minecraft's global shortcuts (fullscreen, screenshot, narrator, debug keys)
+ * and the movement keys can swallow them.
  */
 @Mixin(KeyboardHandler.class)
 public abstract class KeyboardHandlerMixin {
@@ -22,6 +24,9 @@ public abstract class KeyboardHandlerMixin {
                 && minecraft.screen instanceof PcDisplayScreen screen
                 && screen.isCapturingKeyboard()) {
             screen.handleRawKey(event, action);
+            ci.cancel();
+        } else if (handle == minecraft.getWindow().handle() && DisplayManager.isCapturingKeyboard()) {
+            DisplayManager.handleRawKey(event, action);
             ci.cancel();
         }
     }

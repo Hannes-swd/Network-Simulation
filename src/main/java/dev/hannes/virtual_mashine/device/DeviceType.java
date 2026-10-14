@@ -27,9 +27,16 @@ public enum DeviceType {
     /** USB microphone: what players near it say goes to the computer's sound card as line-in. */
     MICROPHONE("microphone", Kind.USB, 0, "USB", -1, true, 0, 0, false, 0.16, 0.06, 0.0),
     /** USB webcam: films the world in front of it for the computer (a video device in Linux). */
-    CAMERA("camera", Kind.USB, 0, "USB", -1, true, 0, 0, false, 0.19, 0.14, 0.0);
+    CAMERA("camera", Kind.USB, 0, "USB", -1, true, 0, 0, false, 0.19, 0.14, 0.0),
+    /** HDMI switch: one input from a computer, four monitor outputs (own screens each, or all the same picture). */
+    HDMI_SWITCH("hdmi_switch", Kind.HDMI_SWITCH, 0, "", -1, true, 0, 0, true, 0.25, 0.09, 0.45),
+    /** USB hub: plugged into a computer (or another hub), gives four more USB sockets. */
+    USB_HUB("usb_hub", Kind.USB_HUB, 0, "", -1, true, 0, 0, true, 0.19, 0.06, 0.36);
 
-    public enum Kind { VM, SWITCH, MODEM, AP, IO, USB }
+    public enum Kind { VM, SWITCH, MODEM, AP, IO, USB, HDMI_SWITCH, USB_HUB }
+
+    /** Picture outputs (heads) of a computer's graphics card: its HDMI sockets plus what HDMI switches add. */
+    public static final int MAX_SCREENS = 4;
 
     /** How many wireless clients one access point carries. */
     public static final int AP_CLIENT_SLOTS = 16;
@@ -93,8 +100,62 @@ public enum DeviceType {
             case PC -> 4;
             case SERVER, LAPTOP, DISPLAY -> 2;
             case MICROPHONE, CAMERA -> 1;
+            case USB_HUB -> 5;
             default -> 0;
         };
+    }
+
+    /** HDMI sockets: picture outputs of computers, the input of a monitor, input and outputs of an HDMI switch. */
+    public int hdmiPorts() {
+        return switch (this) {
+            case PC -> 2;
+            case SERVER, LAPTOP, DISPLAY -> 1;
+            case HDMI_SWITCH -> 5;
+            default -> 0;
+        };
+    }
+
+    /** A computer whose graphics card drives several screens (HDMI monitors). */
+    public boolean hasVideoOutputs() {
+        return isVm() && hdmiPorts() > 0 && this != DISPLAY;
+    }
+
+    /** The laptop's own panel is its first screen; HDMI monitors come after it. */
+    public int firstHdmiScreen() {
+        return this == LAPTOP ? 1 : 0;
+    }
+
+    public boolean isHdmiPort(int port) {
+        int first = ports + (hasConsole() ? 1 : 0) + usbPorts();
+        return port >= first && port < first + hdmiPorts();
+    }
+
+    /** 0 for the first HDMI socket. */
+    public int hdmiIndex(int port) {
+        return port - ports - (hasConsole() ? 1 : 0) - usbPorts();
+    }
+
+    /** Port number of the {@code index}-th HDMI socket. */
+    public int hdmiPort(int index) {
+        return ports + (hasConsole() ? 1 : 0) + usbPorts() + index;
+    }
+
+    /** Port number of the {@code index}-th USB socket. */
+    public int usbPort(int index) {
+        return ports + (hasConsole() ? 1 : 0) + index;
+    }
+
+    /** The picture leaves the device here (computer output, switch output); the other end must be an input. */
+    public boolean isHdmiOutput(int port) {
+        return isHdmiPort(port) && (hasVideoOutputs() || this == HDMI_SWITCH && hdmiIndex(port) > 0);
+    }
+
+    /**
+     * USB plugs that point towards the computer: a microphone's or camera's plug and a hub's host port.
+     * A USB cable always joins one of these with a socket of a computer or hub.
+     */
+    public boolean isUsbUpstream(int port) {
+        return isUsbPort(port) && (isUsbDevice() || this == USB_HUB && usbIndex(port) == 0);
     }
 
     /** A microphone or camera: it hangs on a computer's USB port. */
@@ -102,9 +163,9 @@ public enum DeviceType {
         return kind == Kind.USB;
     }
 
-    /** Network ports, the serial port, then the USB ports. */
+    /** Network ports, the serial port, the USB ports, then the HDMI ports. */
     public int totalPorts() {
-        return ports + (hasConsole() ? 1 : 0) + usbPorts();
+        return ports + (hasConsole() ? 1 : 0) + usbPorts() + hdmiPorts();
     }
 
     public boolean isUsbPort(int port) {
@@ -123,7 +184,19 @@ public enum DeviceType {
 
     /** What the port is called on the device's housing, e.g. "eth0", "Port 3" or "Console". */
     public String portName(int port) {
+        if (isHdmiPort(port)) {
+            int index = hdmiIndex(port);
+            return switch (this) {
+                case PC -> "HDMI " + (index + 1);
+                case DISPLAY -> "HDMI IN";
+                case HDMI_SWITCH -> index == 0 ? "IN" : "OUT " + index;
+                default -> "HDMI";
+            };
+        }
         if (isUsbPort(port)) {
+            if (this == USB_HUB) {
+                return usbIndex(port) == 0 ? "Host" : "USB " + usbIndex(port);
+            }
             return isUsbDevice() ? "USB" : "USB " + (usbIndex(port) + 1);
         }
         if (isConsolePort(port)) {

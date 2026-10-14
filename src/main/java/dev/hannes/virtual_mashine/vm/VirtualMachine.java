@@ -54,6 +54,12 @@ public final class VirtualMachine {
     private volatile String messageKey = "";
     private volatile String messageDetail = "";
     private volatile int vncPort = -1;
+    /** VNC port of every screen (head) of the graphics card while running; empty with the old single-screen card. */
+    private volatile int[] screenPorts = new int[0];
+    /** Per screen: the size its monitor wants, null where none hangs (set by the HDMI routing). */
+    private volatile int[][] wantedScreens = new int[DeviceType.MAX_SCREENS][];
+    /** Per screen: the size last reported to the guest; {0, 0} = unplugged (worker thread only). */
+    private int[][] appliedScreens = new int[0][];
     private volatile boolean freezeSupported;
 
     // Only touched on the worker thread.
@@ -62,7 +68,7 @@ public final class VirtualMachine {
     /** Network cards wired to the mod's cables while running; 0 when off or not in cable mode. */
     private volatile int cablePorts;
     private volatile @Nullable SerialLine serial;
-    private int reservedVncPort = -1;
+    private final List<Integer> reservedVncPorts = new ArrayList<>();
     /** This start boots the Android installer straight from the image (worker thread only). */
     private boolean installerBoot;
     /** Last carrier state pushed to each card: -1 unknown, 0 down, 1 up. */
@@ -161,6 +167,76 @@ public final class VirtualMachine {
 
     public int vncPort() {
         return state == State.RUNNING ? vncPort : -1;
+    }
+
+    /** VNC port of one screen of the graphics card; screen 0 is {@link #vncPort()}. -1 when off or missing. */
+    public int vncPort(int head) {
+        if (head == 0) {
+            return vncPort();
+        }
+        int[] ports = screenPorts;
+        return state == State.RUNNING && head > 0 && head < ports.length ? ports[head] : -1;
+    }
+
+    /** VNC ports of all screens while running (empty for machines with one screen only). */
+    public int[] screenPorts() {
+        return state == State.RUNNING ? screenPorts.clone() : new int[0];
+    }
+
+    /** Bit per screen that shows something: screen 0 always, the others while a monitor hangs on them. */
+    public int activeScreens() {
+        int mask = 1;
+        int[][] wanted = wantedScreens;
+        for (int head = 1; head < Math.min(wanted.length, screenPorts.length); head++) {
+            if (wanted[head] != null) {
+                mask |= 1 << head;
+            }
+        }
+        return mask;
+    }
+
+    /**
+     * The HDMI routing: which screens have a monitor and the size it wants. Screens without one are
+     * unplugged in the guest; screen 0 keeps its size then (it is also the machine's own window).
+     */
+    public void setScreens(int[][] sizes) {
+        int[][] previous = wantedScreens;
+        boolean same = previous.length == sizes.length;
+        for (int i = 0; same && i < sizes.length; i++) {
+            same = java.util.Arrays.equals(previous[i], sizes[i]);
+        }
+        if (same) {
+            return;
+        }
+        wantedScreens = sizes.clone();
+        worker.execute(this::applyScreens);
+    }
+
+    /** Worker thread: reports plugged and unplugged monitors to the graphics card, screen by screen. */
+    private void applyScreens() {
+        int[] ports = screenPorts;
+        if (state != State.RUNNING || ports.length == 0) {
+            return;
+        }
+        int[][] wanted = wantedScreens;
+        for (int head = 0; head < ports.length && head < appliedScreens.length; head++) {
+            int[] size = head < wanted.length ? wanted[head] : null;
+            if (size == null) {
+                if (head == 0) {
+                    continue; // The machine's own screen stays as it is.
+                }
+                size = new int[]{0, 0};
+            }
+            if (java.util.Arrays.equals(size, appliedScreens[head])) {
+                continue;
+            }
+            try {
+                VncScreenControl.requestSize(ports[head], size[0], size[1]);
+                appliedScreens[head] = size;
+            } catch (IOException e) {
+                Virtual_mashine.LOGGER.debug("Could not set screen {} of {} to {}x{}", head, id, size[0], size[1], e);
+            }
+        }
     }
 
     public String messageKey() {
@@ -273,6 +349,7 @@ public final class VirtualMachine {
             current.autoStart = wanted.autoStart;
             current.typingLayout = wanted.typingLayout;
             current.clipboardSharing = wanted.clipboardSharing;
+            current.multiScreen = wanted.multiScreen; // Takes effect with the next fresh start.
             current.displayUrl = wanted.displayUrl;
             current.displayWidth = wanted.displayWidth;
             current.displayHeight = wanted.displayHeight;
@@ -354,8 +431,16 @@ public final class VirtualMachine {
             ensureDisk();
             killStaleProcess();
 
-            int display = findFreeVncPort();
-            reservedVncPort = display;
+            // Hardware of a fresh start; a frozen machine resumes on the graphics card it was frozen with.
+            if (!resume) {
+                config.videoOutputs = deviceType().hasVideoOutputs() && config.multiScreen ? DeviceType.MAX_SCREENS : 0;
+            }
+            int[] ports = new int[Math.max(1, config.videoOutputs)];
+            for (int i = 0; i < ports.length; i++) {
+                ports[i] = findFreeVncPort();
+                reservedVncPorts.add(ports[i]);
+            }
+            int display = ports[0];
             int qmpPort = findFreePort();
             eventPort = findFreePort();
             int serialPort = findFreePort();
@@ -385,7 +470,7 @@ public final class VirtualMachine {
                 spicePassword = randomTicket();
                 Files.writeString(spiceKeyPath(), spicePassword, StandardCharsets.US_ASCII);
             }
-            List<String> command = buildCommand(qemu, display, qmpPort, serialPort, resume, wires);
+            List<String> command = buildCommand(qemu, ports, qmpPort, serialPort, resume, wires);
             Virtual_mashine.LOGGER.info("Starting PC {}: {}", id, String.join(" ", command));
 
             ProcessBuilder builder = new ProcessBuilder(command)
@@ -408,6 +493,14 @@ public final class VirtualMachine {
                 saveConfig();
             }
             vncPort = display;
+            if (config.videoOutputs > 0) {
+                screenPorts = ports;
+                // QEMU starts with only the first screen connected, at the card's default size.
+                appliedScreens = new int[ports.length][];
+                for (int head = 1; head < ports.length; head++) {
+                    appliedScreens[head] = new int[]{0, 0};
+                }
+            }
             String label = id.toString().substring(0, 8);
             if (config.sound) {
                 soundTap = new VncAudioTap(display, label, pcm -> manager.network().media().audio(id, pcm));
@@ -440,6 +533,8 @@ public final class VirtualMachine {
             if (VmConfig.NET_CABLE.equals(config.netMode) && wires.length > 0) {
                 manager.network().vmNetworkChanged(id, true);
             }
+            // Monitors already on the HDMI cables are there before the guest boots, like on a real PC.
+            applyScreens();
         } catch (IOException | RuntimeException e) {
             Virtual_mashine.LOGGER.warn("Could not start PC {}", id, e);
             if (started != null) {
@@ -613,10 +708,10 @@ public final class VirtualMachine {
         }
         process = null;
         vncPort = -1;
-        if (reservedVncPort > 0) {
-            RESERVED_VNC_PORTS.remove(reservedVncPort);
-            reservedVncPort = -1;
-        }
+        screenPorts = new int[0];
+        appliedScreens = new int[0][];
+        RESERVED_VNC_PORTS.removeAll(reservedVncPorts);
+        reservedVncPorts.clear();
         try {
             Files.deleteIfExists(dir.resolve("qemu.pid"));
         } catch (IOException ignored) {
@@ -648,8 +743,9 @@ public final class VirtualMachine {
         }
     }
 
-    private List<String> buildCommand(Path qemu, int vncPort, int qmpPort, int serialPort, boolean resume, NetworkFabric.UdpBinding[] wires) {
+    private List<String> buildCommand(Path qemu, int[] vncPorts, int qmpPort, int serialPort, boolean resume, NetworkFabric.UdpBinding[] wires) {
         VmConfig c = config;
+        int vncPort = vncPorts[0];
         List<String> cmd = new ArrayList<>();
         cmd.add(qemu.toString());
         cmd.add("-name");
@@ -683,7 +779,14 @@ public final class VirtualMachine {
         cmd.addAll(List.of("-drive", cdrom));
         cmd.addAll(List.of("-device", "ide-cd,drive=cd0,bus=ide.1,id=cdrom0,bootindex=" + (firstBoot + (c.bootFromCd ? 0 : 1))));
 
-        cmd.addAll(List.of("-vga", "std"));
+        if (c.videoOutputs > 0) {
+            // A graphics card with several outputs (heads): every HDMI monitor is a screen of its own in the
+            // guest, which can extend the desktop over them or mirror it. It takes the PCI slot "-vga std"
+            // had (first PCI device), so network cards keep their addresses and names in the guest.
+            cmd.addAll(List.of("-vga", "none", "-device", "virtio-vga,id=video0,max_outputs=" + c.videoOutputs));
+        } else {
+            cmd.addAll(List.of("-vga", "std"));
+        }
         if (deviceType() == DeviceType.DISPLAY) {
             // The guest's preferred screen mode (EDID) matches the display's shape, and the page comes
             // through fw_cfg, which the kiosk system reads at start.
@@ -731,10 +834,14 @@ public final class VirtualMachine {
                 cmd.addAll(List.of("-audiodev", "none,id=snd0", "-device", "ich9-intel-hda", "-device", "hda-output,audiodev=snd0"));
             }
         }
-        if (c.clipboardPort) {
+        boolean screens = c.videoOutputs > 1;
+        if (c.clipboardPort || screens) {
             // Shared clipboard with the viewer. Needs spice-vdagent in the guest, which most Linux desktops ship.
+            // With several screens the agent also places the mouse: it knows where each screen sits on the
+            // desktop, the USB tablet alone would spread every screen's pointer over the whole desktop.
             // Added after all other PCI devices so existing guests keep their device addresses.
-            cmd.addAll(List.of("-chardev", "qemu-vdagent,id=vdagent,name=vdagent,clipboard=on,mouse=off",
+            cmd.addAll(List.of("-chardev", "qemu-vdagent,id=vdagent,name=vdagent,clipboard=" + (c.clipboardPort ? "on" : "off")
+                            + ",mouse=" + (screens ? "on" : "off"),
                     "-device", "virtio-serial-pci,id=vdagent-serial",
                     "-device", "virtserialport,bus=vdagent-serial.0,chardev=vdagent,name=com.redhat.spice.0"));
         }
@@ -748,6 +855,11 @@ public final class VirtualMachine {
         // Caps Lock from the keysym's case and turns Shift+S into a lower-case s.
         cmd.addAll(List.of("-display", "none", "-vnc", "127.0.0.1:" + (vncPort - 5900) + ",lock-key-sync=off"
                 + (c.sound ? ",audiodev=snd0" : "")));
+        for (int head = 1; head < vncPorts.length; head++) {
+            // One VNC server per further screen; keys and clicks from any of them reach the guest.
+            cmd.addAll(List.of("-vnc", "127.0.0.1:" + (vncPorts[head] - 5900) + ",id=screen" + head
+                    + ",display=video0,head=" + head + ",lock-key-sync=off"));
+        }
         cmd.addAll(List.of("-qmp", "tcp:127.0.0.1:" + qmpPort + ",server=on,wait=off"));
         // Under WHPX a warm reset can hang the guest in its boot loader: a reboot ends QEMU instead,
         // and QmpEvents (on the second monitor) has the machine started again from cold.
@@ -1067,7 +1179,8 @@ public final class VirtualMachine {
         fresh.ramMb = Math.min(typeForNew.defaultRamMb, HostInfo.maxRamMb());
         fresh.cpus = Math.min(typeForNew.defaultCpus, HostInfo.cpuCount());
         fresh.netMode = VmConfig.NET_CABLE;
-        fresh.autoStart = typeForNew.alwaysOnByDefault;
+        // A new monitor waits for its HDMI cable or a page; its own system starts once a page is set.
+        fresh.autoStart = typeForNew.alwaysOnByDefault && typeForNew != DeviceType.DISPLAY;
         fresh.sound = typeForNew == DeviceType.PC || typeForNew == DeviceType.LAPTOP || typeForNew == DeviceType.PHONE
                 || typeForNew == DeviceType.DISPLAY;
         if (typeForNew == DeviceType.PHONE) {
@@ -1089,7 +1202,7 @@ public final class VirtualMachine {
             case MANAGED_SWITCH -> "Switch";
             case LAPTOP -> "Laptop";
             case PHONE -> "Handy";
-            case DISPLAY -> "Display";
+            case DISPLAY -> "Monitor";
             default -> "PC";
         };
     }

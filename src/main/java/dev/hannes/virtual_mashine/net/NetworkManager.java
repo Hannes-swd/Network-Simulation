@@ -84,6 +84,11 @@ public final class NetworkManager {
     private final Map<UUID, UUID> phoneCarriers = new ConcurrentHashMap<>();
     /** Microphones and cameras switched off at their block. */
     private final Set<UUID> usbDisabled = ConcurrentHashMap.newKeySet();
+    /** What each microphone picks up (kept by the block); missing = voices only. */
+    private final Map<UUID, MicMode> micModes = new ConcurrentHashMap<>();
+    /** HDMI switches set to show one picture on all outputs (kept by the block). */
+    private final Set<UUID> hdmiMirrored = ConcurrentHashMap.newKeySet();
+    private volatile VideoRouting video = VideoRouting.EMPTY;
     private int ticks;
 
     public NetworkManager(MinecraftServer server, VmManager vms, Path root) throws IOException {
@@ -166,8 +171,8 @@ public final class NetworkManager {
                     vms.autoStart(id, type);
                 }
             }
-            case USB -> {
-                // Microphones and cameras are handled by the MediaHub; nothing to keep running here.
+            case USB, USB_HUB, HDMI_SWITCH -> {
+                // Microphones and cameras are handled by the MediaHub, hubs only pass things on.
             }
         }
     }
@@ -180,8 +185,8 @@ public final class NetworkManager {
         for (int i = 0; i < Math.min(32, type.totalPorts()); i++) {
             PortRef port = new PortRef(id, i);
             Cable cable = cableAt(port);
-            if (cable == null || type.isUsbPort(i)) {
-                continue; // USB sockets have no LEDs.
+            if (cable == null || type.isUsbPort(i) || type.isHdmiPort(i)) {
+                continue; // USB and HDMI sockets have no LEDs.
             }
             boolean up = type.isConsolePort(i) ? consoleLink(port, cable) : fabric.hasLink(port);
             if (up) {
@@ -202,24 +207,101 @@ public final class NetworkManager {
                 Process modem = modems.get(id);
                 yield modem != null && modem.isAlive();
             }
-            case VM -> vms.isPowered(id);
+            // A monitor also lights up while a running computer feeds it over HDMI.
+            case VM -> vms.isPowered(id) || type == DeviceType.DISPLAY && hdmiSignal(id);
             case USB -> {
                 UUID host = usbHost(id);
                 yield devices.containsKey(id) && usbEnabled(id) && host != null && vms.runningMachine(host) != null;
+            }
+            case USB_HUB -> {
+                UUID host = usbHost(id);
+                yield devices.containsKey(id) && host != null && vms.runningMachine(host) != null;
+            }
+            case HDMI_SWITCH -> {
+                UUID source = hdmiSource(id, type, 0);
+                yield devices.containsKey(id) && source != null && vms.runningMachine(source) != null;
             }
         };
     }
 
     // ---------------------------------------------------------------- USB devices
 
-    /** The computer a microphone or camera is plugged into, or null. */
+    /** The computer a microphone, camera or USB hub is plugged into (also through hubs), or null. */
     public @Nullable UUID usbHost(UUID device) {
-        Cable cable = cableAt(new PortRef(device, 0));
-        if (cable == null || !cable.cableType().isUsb()) {
+        PortRef plug = new PortRef(device, 0); // A USB device's plug and a hub's host port are both port 0.
+        for (int depth = 0; depth < 6; depth++) {
+            Cable cable = cableAt(plug);
+            if (cable == null || !cable.cableType().isUsb()) {
+                return null;
+            }
+            Cable.End other = cable.otherEnd(plug);
+            DeviceType type = other.type();
+            if (type == DeviceType.USB_HUB && !type.isUsbUpstream(other.port)) {
+                plug = new PortRef(other.device, 0); // Up through the hub towards its computer.
+                continue;
+            }
+            return type.isVm() ? other.device : null;
+        }
+        return null; // Hubs plugged into each other in a circle.
+    }
+
+    /** The computer whose picture arrives at this monitor, HDMI switch or computer, or null. */
+    private @Nullable UUID hdmiSource(UUID device, DeviceType type, int depth) {
+        if (type.hasVideoOutputs()) {
+            return device;
+        }
+        if (depth > 4 || type.hdmiPorts() == 0) {
             return null;
         }
-        Cable.End other = cable.otherEnd(new PortRef(device, 0));
-        return other.type().isUsbDevice() ? null : other.device;
+        PortRef input = new PortRef(device, type.hdmiPort(0));
+        Cable cable = cableAt(input);
+        if (cable == null || !cable.cableType().isHdmi()) {
+            return null;
+        }
+        Cable.End other = cable.otherEnd(input);
+        return other.type().isHdmiOutput(other.port) ? hdmiSource(other.device, other.type(), depth + 1) : null;
+    }
+
+    // ---------------------------------------------------------------- HDMI
+
+    /** A running computer's picture arrives at this monitor. */
+    public boolean hdmiSignal(UUID monitor) {
+        VideoRouting.Feed feed = video.feed(monitor);
+        return feed != null && vms.runningMachine(feed.source()) != null;
+    }
+
+    /** Which monitor shows which screen of which computer. Rebuilt whenever cables change and every second. */
+    public VideoRouting video() {
+        return video;
+    }
+
+    /** The switch on an HDMI switch: one picture on all outputs (true) or a screen of its own each. */
+    public void setHdmiMirrored(UUID hdmiSwitch, boolean mirrored) {
+        boolean changed = mirrored ? hdmiMirrored.add(hdmiSwitch) : hdmiMirrored.remove(hdmiSwitch);
+        if (changed) {
+            rerouteVideo();
+        }
+    }
+
+    /** Follows the HDMI cables again and tells every running computer which screens have a monitor. */
+    public void rerouteVideo() {
+        VideoRouting routing = VideoRouting.compute(cables, hdmiMirrored::contains, vms::displayBlocks);
+        video = routing;
+        for (VirtualMachine vm : vms.runningMachines()) {
+            if (vm.deviceType().hasVideoOutputs()) {
+                vm.setScreens(routing.screens(vm.id()));
+            }
+        }
+    }
+
+    /** The player stands within {@code range} blocks of a monitor that shows this screen. */
+    public boolean seesScreen(ServerPlayer player, UUID source, int head, double range) {
+        for (UUID monitor : video.monitorsOf(source, head)) {
+            if (isNear(monitor, player, range)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public boolean usbEnabled(UUID device) {
@@ -233,6 +315,15 @@ public final class NetworkManager {
         } else {
             usbDisabled.add(device);
         }
+    }
+
+    public MicMode micMode(UUID mic) {
+        return micModes.getOrDefault(mic, MicMode.VOICE);
+    }
+
+    /** The mode switch on a microphone block (kept by the block). */
+    public void setMicMode(UUID mic, MicMode mode) {
+        micModes.put(mic, mode);
     }
 
     /** The player carrying this phone right now, or null. */
@@ -253,6 +344,8 @@ public final class NetworkManager {
         pending.entrySet().removeIf(entry -> entry.getValue().port.device().equals(id));
         wlan.deviceRemoved(id);
         devices.remove(id);
+        hdmiMirrored.remove(id);
+        micModes.remove(id);
         IoHost io = ioHosts.remove(id);
         if (io != null) {
             fabric.detachHost(new PortRef(id, 0));
@@ -263,6 +356,7 @@ public final class NetworkManager {
         if (changed) {
             save();
             broadcastCables();
+            rerouteVideo();
         }
         refreshLinks();
     }
@@ -446,11 +540,20 @@ public final class NetworkManager {
         return other == null ? null : other.serial();
     }
 
-    /** A USB device works while the computer it hangs on runs. */
+    /** A USB device works while the computer it hangs on (directly or through hubs) runs. */
     private boolean usbLink(PortRef port, Cable cable) {
-        Cable.End other = cable.otherEnd(port);
-        UUID host = other.type().isUsbDevice() ? port.device() : other.device;
-        return vms.runningMachine(host) != null;
+        Cable.End end = cable.endAt(port);
+        Cable.End top = end.type().isUsbUpstream(end.port) ? cable.otherEnd(port) : end;
+        UUID host = top.type().isVm() ? top.device : usbHost(top.device);
+        return host != null && vms.runningMachine(host) != null;
+    }
+
+    /** An HDMI cable carries a picture while the computer at its source end runs. */
+    private boolean hdmiLink(PortRef port, Cable cable) {
+        Cable.End end = cable.endAt(port);
+        Cable.End output = end.type().isHdmiOutput(end.port) ? end : cable.otherEnd(port);
+        UUID source = hdmiSource(output.device, output.type(), 0);
+        return source != null && vms.runningMachine(source) != null;
     }
 
     private boolean consoleLink(PortRef port, Cable cable) {
@@ -579,8 +682,10 @@ public final class NetworkManager {
         }
         boolean consolePort = placed.type.isConsolePort(port.port());
         boolean usbPort = placed.type.isUsbPort(port.port());
-        if (item.cableType.isConsole() != consolePort || item.cableType.isUsb() != usbPort) {
+        boolean hdmiPort = placed.type.isHdmiPort(port.port());
+        if (item.cableType.isConsole() != consolePort || item.cableType.isUsb() != usbPort || item.cableType.isHdmi() != hdmiPort) {
             return usbPort ? "virtual_mashine.ports.msg.needs_usb_cable"
+                    : hdmiPort ? "virtual_mashine.ports.msg.needs_hdmi_cable"
                     : consolePort ? "virtual_mashine.ports.msg.needs_console_cable" : "virtual_mashine.ports.msg.needs_network_cable";
         }
         Pending start = pending.get(player.getUUID());
@@ -596,8 +701,14 @@ public final class NetworkManager {
         if (!start.dimension.equals(placed.dimension)) {
             return "virtual_mashine.ports.msg.other_dimension";
         }
-        if (start.cable.isUsb() && start.deviceType.isUsbDevice() == placed.type.isUsbDevice()) {
-            return "virtual_mashine.ports.msg.usb_pair"; // One end in a microphone or camera, the other in a computer.
+        if (start.port.device().equals(port.device()) && (start.cable.isUsb() || start.cable.isHdmi())) {
+            return "virtual_mashine.ports.msg.same_device";
+        }
+        if (start.cable.isUsb() && start.deviceType.isUsbUpstream(start.port.port()) == placed.type.isUsbUpstream(port.port())) {
+            return "virtual_mashine.ports.msg.usb_pair"; // One end in a device or a hub's host port, the other in a computer or hub.
+        }
+        if (start.cable.isHdmi() && start.deviceType.isHdmiOutput(start.port.port()) == placed.type.isHdmiOutput(port.port())) {
+            return "virtual_mashine.ports.msg.hdmi_pair"; // One end in a picture output, the other in a monitor or switch input.
         }
         Cable cable = new Cable();
         cable.id = UUID.randomUUID();
@@ -623,6 +734,9 @@ public final class NetworkManager {
         broadcastCables();
         sendHeldCable(player);
         refreshLinks();
+        if (cable.cableType().isHdmi()) {
+            rerouteVideo();
+        }
         return "virtual_mashine.ports.msg.connected";
     }
 
@@ -645,6 +759,9 @@ public final class NetworkManager {
         save();
         broadcastCables();
         refreshLinks();
+        if (cable.cableType().isHdmi()) {
+            rerouteVideo();
+        }
         return "virtual_mashine.ports.msg.unplugged";
     }
 
@@ -667,8 +784,9 @@ public final class NetworkManager {
             PortRef port = new PortRef(id, i);
             boolean console = type.isConsolePort(i);
             boolean usb = type.isUsbPort(i);
+            boolean hdmi = type.isHdmiPort(i);
             String name = portLabel(type, i, role);
-            String mac = type.isVm() && !console && !usb ? DeviceMac.of(id, i) : "";
+            String mac = type.isVm() && !console && !usb && !hdmi ? DeviceMac.of(id, i) : "";
             Cable cable = cableAt(port);
             NetworkFabric.PortStats stats = fabric.stats(port);
             boolean activity = now - stats.lastActivity < ACTIVITY_NANOS && stats.lastActivity != 0;
@@ -684,7 +802,8 @@ public final class NetworkManager {
             if (cable != null) {
                 Cable.End other = cable.otherEnd(port);
                 String peer = deviceName(other.device, other.type()) + " · " + other.type().portName(other.port);
-                boolean link = console ? consoleLink(port, cable) : usb ? usbLink(port, cable) : fabric.hasLink(port);
+                boolean link = console ? consoleLink(port, cable) : usb ? usbLink(port, cable)
+                        : hdmi ? hdmiLink(port, cable) : fabric.hasLink(port);
                 int speed = link ? cable.cableType().speedMbit(cable.length()) : 0;
                 ports.add(new NetPayloads.PortInfo(name, NetPayloads.PortInfo.CONNECTED, link, activity && link, peer, cable.type,
                         cable.color, (int) Math.round(cable.length()), console, mac, speed, rx, tx));
@@ -705,7 +824,7 @@ public final class NetworkManager {
     /** Port name, with the role OpenWrt gave it after the automatic set-up. */
     private static String portLabel(DeviceType type, int port, String role) {
         String name = type.portName(port);
-        if (role.equals("router") && !type.isConsolePort(port) && !type.isUsbPort(port)) {
+        if (role.equals("router") && !type.isConsolePort(port) && !type.isUsbPort(port) && !type.isHdmiPort(port)) {
             return name + (port == 1 ? " WAN" : " LAN");
         }
         return name;
@@ -721,6 +840,8 @@ public final class NetworkManager {
             case MICROPHONE -> "Mikrofon";
             case CAMERA -> "Kamera";
             case ACCESS_POINT -> "Access Point";
+            case HDMI_SWITCH -> "HDMI-Switch";
+            case USB_HUB -> "USB-Hub";
             case IO_MODULE -> {
                 IoHost io = ioHosts.get(id);
                 if (io != null && !io.io().name().isEmpty()) {
@@ -752,6 +873,8 @@ public final class NetworkManager {
         wlan.tick();
         // Cheap safety net: carrier states only change on the guest when they differ.
         refreshLinks();
+        // Also picks up monitors that changed their size and computers that just started.
+        rerouteVideo();
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             String dimension = dimensionOf(player.level());
             if (!dimension.equals(syncedDimension.get(player.getUUID()))) {

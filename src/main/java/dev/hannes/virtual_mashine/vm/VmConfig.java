@@ -66,6 +66,13 @@ public final class VmConfig {
      */
     public boolean audioInput = false;
     public boolean mediaPort = false;
+    /**
+     * Graphics card with several screens (HDMI monitors), from the next fresh start on. Off keeps the
+     * plain VGA card of older versions, for systems that only know that one.
+     */
+    public boolean multiScreen = true;
+    /** Screens of the graphics card of the last fresh start; 0 = the plain VGA card of older versions. */
+    public int videoOutputs = 0;
     /** Display: the page it shows (handed to its kiosk system at start) and its size in blocks. */
     public String displayUrl = "";
     public int displayWidth = 2;

@@ -24,6 +24,10 @@ public record PcInfoPayload(
         String messageKey,
         String messageDetail,
         String configJson,
+        /* VNC port of every screen of the graphics card (empty for a machine with one screen). */
+        List<Integer> screenPorts,
+        /* Bit per screen that shows something (a monitor hangs on it; screen 0 always). */
+        int activeScreens,
         List<String> isos,
         List<String> images,
         String isoFolder,
@@ -47,6 +51,12 @@ public record PcInfoPayload(
         String messageKey = buf.readUtf(256);
         String messageDetail = buf.readUtf(MAX_DETAIL);
         String configJson = buf.readUtf();
+        int screenCount = Math.min(buf.readVarInt(), 16);
+        List<Integer> screenPorts = new ArrayList<>(screenCount);
+        for (int i = 0; i < screenCount; i++) {
+            screenPorts.add(buf.readVarInt());
+        }
+        int activeScreens = buf.readVarInt();
         int isoCount = buf.readVarInt();
         List<String> isos = new ArrayList<>(Math.min(isoCount, 512));
         for (int i = 0; i < isoCount; i++) {
@@ -63,7 +73,7 @@ public record PcInfoPayload(
         int hostMaxRamMb = buf.readVarInt();
         int hostFreeRamMb = buf.readInt();
         return new PcInfoPayload(id, open, state, vncPort, canFreeze, diskExists, messageKey, messageDetail, configJson,
-                isos, images, isoFolder, qemuFound, hostCpus, hostMaxRamMb, hostFreeRamMb);
+                screenPorts, activeScreens, isos, images, isoFolder, qemuFound, hostCpus, hostMaxRamMb, hostFreeRamMb);
     }
 
     private void write(RegistryFriendlyByteBuf buf) {
@@ -76,6 +86,11 @@ public record PcInfoPayload(
         buf.writeUtf(messageKey, 256);
         buf.writeUtf(messageDetail.length() > MAX_DETAIL ? messageDetail.substring(messageDetail.length() - MAX_DETAIL) : messageDetail, MAX_DETAIL);
         buf.writeUtf(configJson);
+        buf.writeVarInt(screenPorts.size());
+        for (int port : screenPorts) {
+            buf.writeVarInt(port);
+        }
+        buf.writeVarInt(activeScreens);
         List<String> sent = isos.size() > 512 ? isos.subList(0, 512) : isos;
         buf.writeVarInt(sent.size());
         for (String iso : sent) {

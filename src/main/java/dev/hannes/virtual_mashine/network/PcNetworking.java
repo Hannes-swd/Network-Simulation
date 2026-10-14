@@ -33,6 +33,14 @@ public final class PcNetworking {
         PayloadTypeRegistry.serverboundPlay().register(MediaPayloads.AudioFocus.TYPE, MediaPayloads.AudioFocus.CODEC);
         PayloadTypeRegistry.serverboundPlay().register(MediaPayloads.MicAudio.TYPE, MediaPayloads.MicAudio.CODEC);
         PayloadTypeRegistry.serverboundPlay().register(MediaPayloads.CameraFrame.TYPE, MediaPayloads.CameraFrame.CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(MediaPayloads.MicGameJob.TYPE, MediaPayloads.MicGameJob.CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(MediaPayloads.MicGameAudio.TYPE, MediaPayloads.MicGameAudio.CODEC);
+        ServerPlayNetworking.registerGlobalReceiver(MediaPayloads.MicGameAudio.TYPE, (payload, context) -> {
+            VmManager manager = VmManager.get();
+            if (manager != null) {
+                manager.network().media().gameAudio(context.player(), payload);
+            }
+        });
         ServerPlayNetworking.registerGlobalReceiver(MediaPayloads.AudioFocus.TYPE, (payload, context) -> {
             VmManager manager = VmManager.get();
             if (manager != null) {

@@ -21,15 +21,16 @@ public final class TunnelPayloads {
     private TunnelPayloads() {
     }
 
-    /** Client to server: connect tunnel {@code tunnelId} (chosen by the client) to the PC's screen. */
-    public record Open(int tunnelId, UUID pcId) implements CustomPacketPayload {
+    /** Client to server: connect tunnel {@code tunnelId} (chosen by the client) to screen {@code head} of the PC. */
+    public record Open(int tunnelId, UUID pcId, int head) implements CustomPacketPayload {
         public static final Type<Open> TYPE = new Type<>(Virtual_mashine.id("tunnel_open"));
         public static final StreamCodec<RegistryFriendlyByteBuf, Open> CODEC = StreamCodec.ofMember(
                 (payload, buf) -> {
                     buf.writeVarInt(payload.tunnelId);
                     UUIDUtil.STREAM_CODEC.encode(buf, payload.pcId);
+                    buf.writeVarInt(payload.head);
                 },
-                buf -> new Open(buf.readVarInt(), UUIDUtil.STREAM_CODEC.decode(buf)));
+                buf -> new Open(buf.readVarInt(), UUIDUtil.STREAM_CODEC.decode(buf), buf.readVarInt()));
 
         @Override
         public Type<? extends CustomPacketPayload> type() {

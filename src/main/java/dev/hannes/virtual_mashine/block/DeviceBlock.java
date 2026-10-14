@@ -6,6 +6,7 @@ import dev.hannes.virtual_mashine.device.DeviceType;
 import dev.hannes.virtual_mashine.item.CableItem;
 import dev.hannes.virtual_mashine.item.NetworkTesterItem;
 import dev.hannes.virtual_mashine.net.IoModule;
+import dev.hannes.virtual_mashine.net.MicMode;
 import dev.hannes.virtual_mashine.vm.VmManager;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -109,10 +110,29 @@ public class DeviceBlock extends BaseEntityBlock {
                 manager.network().openApView(serverPlayer, device.getOrCreatePcId(), pos, state.getValue(FACING), "");
             } else if (type == DeviceType.IO_MODULE && !player.isShiftKeyDown()) {
                 manager.network().openIoView(serverPlayer, device.getOrCreatePcId(), pos, state.getValue(FACING), "");
+            } else if (type == DeviceType.HDMI_SWITCH && !player.isShiftKeyDown()) {
+                // The slide switch on the housing; sneaking opens the sockets instead.
+                device.setHdmiMirrored(!device.hdmiMirrored());
+                manager.network().setHdmiMirrored(device.getOrCreatePcId(), device.hdmiMirrored());
+                serverPlayer.sendOverlayMessage(net.minecraft.network.chat.Component.translatable(device.hdmiMirrored()
+                        ? "virtual_mashine.hdmi_switch.mirror" : "virtual_mashine.hdmi_switch.extend"));
             } else if (type.isUsbDevice() && !player.isShiftKeyDown()) {
                 // The switch on a microphone or camera; sneaking opens its USB socket instead.
-                device.setUsbEnabled(!device.usbEnabled());
                 UUID id = device.getOrCreatePcId();
+                if (type == DeviceType.MICROPHONE) {
+                    // Voices -> voices + game -> game only -> off -> voices ...
+                    if (!device.usbEnabled()) {
+                        device.setUsbEnabled(true);
+                        device.setMicMode(MicMode.VOICE);
+                    } else if (device.micMode() == MicMode.GAME) {
+                        device.setUsbEnabled(false);
+                    } else {
+                        device.setMicMode(MicMode.byIndex(device.micMode().ordinal() + 1));
+                    }
+                    manager.network().setMicMode(id, device.micMode());
+                } else {
+                    device.setUsbEnabled(!device.usbEnabled());
+                }
                 manager.network().setUsbEnabled(id, device.usbEnabled());
                 serverPlayer.sendOverlayMessage(manager.network().media().usbStatus(id, type));
             } else {

@@ -13,8 +13,10 @@ import net.minecraft.network.chat.Component;
 import java.util.stream.IntStream;
 
 /**
- * Settings of a display block: the page it shows and its size. Using the page happens in the world
- * (look at it and click); this panel is reached by sneaking and right-clicking the block.
+ * Settings of a monitor block: its size and the page its own small system shows. Plugged into a
+ * computer with an HDMI cable it shows that computer instead (the size then sets the resolution).
+ * Using it happens in the world (look at it and click); this panel is reached by sneaking and
+ * right-clicking the block.
  */
 public class DisplaySettingsScreen extends PcScreen {
     private static final int PANEL = 300;
@@ -53,7 +55,7 @@ public class DisplaySettingsScreen extends PcScreen {
         addRenderableWidget(Button.builder(Component.translatable("virtual_mashine.display.apply"), b -> apply())
                 .bounds(left, y, half, 20)
                 .tooltip(Tooltip.create(Component.translatable("virtual_mashine.display.apply.tooltip"))).build());
-        powerButton = addRenderableWidget(Button.builder(Component.empty(), b -> send(isOff() ? PcActionPayload.START : PcActionPayload.POWER_OFF))
+        powerButton = addRenderableWidget(Button.builder(Component.empty(), b -> togglePower())
                 .bounds(left + half + 6, y, half, 20).build());
         y += 24;
         int third = (PANEL - 8) / 3;
@@ -72,17 +74,28 @@ public class DisplaySettingsScreen extends PcScreen {
         updateButtons();
     }
 
-    /** Saves page and size; a running display starts again with them. */
+    /**
+     * Saves page and size. With a page, the own system (re)starts with it and comes back with the world;
+     * without one the monitor only waits for HDMI. A new size reaches a computer on HDMI by itself.
+     */
     private void apply() {
         config.displayUrl = urlBox.getValue().strip();
         config.displayWidth = widthSlider.intValue();
         config.displayHeight = heightSlider.intValue();
+        boolean page = !config.displayUrl.isEmpty();
+        config.autoStart = page;
         ClientPcState.send(pcId(), PcActionPayload.CONFIG, config.toJson());
-        if (!isOff()) {
-            send(PcActionPayload.RESTART);
-        } else {
-            send(PcActionPayload.START);
+        if (page) {
+            send(isOff() ? PcActionPayload.START : PcActionPayload.RESTART);
         }
+    }
+
+    /** Switches the own system (the page) on or off, also for the next time the world is loaded. */
+    private void togglePower() {
+        boolean on = isOff();
+        config.autoStart = on;
+        ClientPcState.send(pcId(), PcActionPayload.CONFIG, config.toJson());
+        send(on ? PcActionPayload.START : PcActionPayload.POWER_OFF);
     }
 
     @Override
@@ -108,5 +121,6 @@ public class DisplaySettingsScreen extends PcScreen {
             graphics.centeredText(font, message, width / 2, top + 166, messageIsError() ? RED : YELLOW);
         }
         graphics.centeredText(font, Component.translatable("virtual_mashine.display.hint"), width / 2, top + 180, GRAY);
+        graphics.centeredText(font, Component.translatable("virtual_mashine.display.hdmi_hint"), width / 2, top + 192, GRAY);
     }
 }
